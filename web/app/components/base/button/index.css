@@ -2,7 +2,7 @@
 
 @layer components {
   .btn {
-    @apply inline-flex justify-center items-center cursor-pointer whitespace-nowrap;
+    @apply inline-flex justify-center items-center cursor-pointer;
   }
 
   .btn-disabled {
