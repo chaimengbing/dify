@@ -19,7 +19,7 @@ const Description = async ({
       <h1 className='title-4xl-semi-bold mb-2 shrink-0 text-center text-text-primary'>
         {t('marketplace.empower')}
       </h1>
-      <h2 className='body-md-regular flex shrink-0 items-center justify-center text-center text-text-tertiary'>
+      <h2 style={{ display: 'none' }} className='body-md-regular flex shrink-0 items-center justify-center text-center text-text-tertiary'>
         {
           isZhHans && (
             <>

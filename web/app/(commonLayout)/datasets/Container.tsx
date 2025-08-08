@@ -10,7 +10,6 @@ import { useQuery } from '@tanstack/react-query'
 // Components
 import ExternalAPIPanel from '../../components/datasets/external-api/external-api-panel'
 import Datasets from './Datasets'
-import DatasetFooter from './DatasetFooter'
 import ApiServer from '../../components/develop/ApiServer'
 import Doc from './Doc'
 import TabSliderNew from '@/app/components/base/tab-slider-new'
@@ -125,7 +124,6 @@ const Container = () => {
       {activeTab === 'dataset' && (
         <>
           <Datasets containerRef={containerRef} tags={tagIDs} keywords={searchKeywords} includeAll={includeAll} />
-          <DatasetFooter />
           {showTagManagementModal && (
             <TagManagementModal type='knowledge' show={showTagManagementModal} />
           )}

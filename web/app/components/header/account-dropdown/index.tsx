@@ -62,13 +62,14 @@ export default function AppSelector() {
   }
 
   return (
-    <div className="">
+    <div className="" style={{ display: 'none' }}>
       <Menu as="div" className="relative inline-block text-left">
         {
           ({ open }) => (
             <>
-              <MenuButton className={cn('inline-flex items-center rounded-[20px] p-0.5 hover:bg-background-default-dodge', open && 'bg-background-default-dodge')}>
-                <Avatar avatar={userProfile.avatar_url} name={userProfile.name} size={36} />
+              <MenuButton
+                className={cn('inline-flex items-center rounded-[20px] p-0.5 hover:bg-background-default-dodge', open && 'bg-background-default-dodge')}>
+                <Avatar avatar={userProfile.avatar_url} name={userProfile.name} size={36}/>
               </MenuButton>
               <Transition
                 as={Fragment}
@@ -93,14 +94,14 @@ export default function AppSelector() {
                           {userProfile.name}
                           {isEducationAccount && (
                             <PremiumBadge size='s' color='blue' className='ml-1 !px-2'>
-                              <RiGraduationCapFill className='mr-1 h-3 w-3' />
+                              <RiGraduationCapFill className='mr-1 h-3 w-3'/>
                               <span className='system-2xs-medium'>EDU</span>
                             </PremiumBadge>
                           )}
                         </div>
                         <div className='system-xs-regular break-all text-text-tertiary'>{userProfile.email}</div>
                       </div>
-                      <Avatar avatar={userProfile.avatar_url} name={userProfile.name} size={36} className='mr-3' />
+                      <Avatar avatar={userProfile.avatar_url} name={userProfile.name} size={36} className='mr-3'/>
                     </div>
                   </MenuItem>
                   <div className="px-1 py-1">
@@ -111,21 +112,23 @@ export default function AppSelector() {
                         )}
                         href='/account'
                         target='_self' rel='noopener noreferrer'>
-                        <RiAccountCircleLine className='size-4 shrink-0 text-text-tertiary' />
-                        <div className='system-md-regular grow px-1 text-text-secondary'>{t('common.account.account')}</div>
-                        <RiArrowRightUpLine className='size-[14px] shrink-0 text-text-tertiary' />
+                        <RiAccountCircleLine className='size-4 shrink-0 text-text-tertiary'/>
+                        <div
+                          className='system-md-regular grow px-1 text-text-secondary'>{t('common.account.account')}</div>
+                        <RiArrowRightUpLine className='size-[14px] shrink-0 text-text-tertiary'/>
                       </Link>
                     </MenuItem>
                     <MenuItem>
                       <div className={cn(itemClassName,
                         'data-[active]:bg-state-base-hover',
                       )} onClick={() => setShowAccountSettingModal({ payload: 'members' })}>
-                        <RiSettings3Line className='size-4 shrink-0 text-text-tertiary' />
-                        <div className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.settings')}</div>
+                        <RiSettings3Line className='size-4 shrink-0 text-text-tertiary'/>
+                        <div
+                          className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.settings')}</div>
                       </div>
                     </MenuItem>
                   </div>
-                  <div className='p-1'>
+                  <div className='p-1' style={{ display: 'none' }}>
                     <MenuItem>
                       <Link
                         className={cn(itemClassName, 'group justify-between',
@@ -133,15 +136,16 @@ export default function AppSelector() {
                         )}
                         href={`https://docs.dify.ai/${docLanguage}/introduction`}
                         target='_blank' rel='noopener noreferrer'>
-                        <RiBookOpenLine className='size-4 shrink-0 text-text-tertiary' />
-                        <div className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.helpCenter')}</div>
-                        <RiArrowRightUpLine className='size-[14px] shrink-0 text-text-tertiary' />
+                        <RiBookOpenLine className='size-4 shrink-0 text-text-tertiary'/>
+                        <div
+                          className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.helpCenter')}</div>
+                        <RiArrowRightUpLine className='size-[14px] shrink-0 text-text-tertiary'/>
                       </Link>
                     </MenuItem>
-                    <Support />
-                    {IS_CLOUD_EDITION && isCurrentWorkspaceOwner && <Compliance />}
+                    <Support/>
+                    {IS_CLOUD_EDITION && isCurrentWorkspaceOwner && <Compliance/>}
                   </div>
-                  <div className='p-1'>
+                  <div className='p-1' style={{ display: 'none' }}>
                     <MenuItem>
                       <Link
                         className={cn(itemClassName, 'group justify-between',
@@ -149,9 +153,10 @@ export default function AppSelector() {
                         )}
                         href='https://roadmap.dify.ai'
                         target='_blank' rel='noopener noreferrer'>
-                        <RiMap2Line className='size-4 shrink-0 text-text-tertiary' />
-                        <div className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.roadmap')}</div>
-                        <RiArrowRightUpLine className='size-[14px] shrink-0 text-text-tertiary' />
+                        <RiMap2Line className='size-4 shrink-0 text-text-tertiary'/>
+                        <div
+                          className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.roadmap')}</div>
+                        <RiArrowRightUpLine className='size-[14px] shrink-0 text-text-tertiary'/>
                       </Link>
                     </MenuItem>
                     {systemFeatures.license.status === LicenseStatus.NONE && <MenuItem>
@@ -161,11 +166,13 @@ export default function AppSelector() {
                         )}
                         href='https://github.com/langgenius/dify'
                         target='_blank' rel='noopener noreferrer'>
-                        <RiGithubLine className='size-4 shrink-0 text-text-tertiary' />
-                        <div className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.github')}</div>
-                        <div className='flex items-center gap-0.5 rounded-[5px] border border-divider-deep bg-components-badge-bg-dimm px-[5px] py-[3px]'>
-                          <RiStarLine className='size-3 shrink-0 text-text-tertiary' />
-                          <GithubStar className='system-2xs-medium-uppercase text-text-tertiary' />
+                        <RiGithubLine className='size-4 shrink-0 text-text-tertiary'/>
+                        <div
+                          className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.github')}</div>
+                        <div
+                          className='flex items-center gap-0.5 rounded-[5px] border border-divider-deep bg-components-badge-bg-dimm px-[5px] py-[3px]'>
+                          <RiStarLine className='size-3 shrink-0 text-text-tertiary'/>
+                          <GithubStar className='system-2xs-medium-uppercase text-text-tertiary'/>
                         </div>
                       </Link>
                     </MenuItem>}
@@ -175,11 +182,14 @@ export default function AppSelector() {
                           <div className={cn(itemClassName, 'justify-between',
                             'data-[active]:bg-state-base-hover',
                           )} onClick={() => setAboutVisible(true)}>
-                            <RiInformation2Line className='size-4 shrink-0 text-text-tertiary' />
-                            <div className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.about')}</div>
+                            <RiInformation2Line className='size-4 shrink-0 text-text-tertiary'/>
+                            <div
+                              className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.about')}</div>
                             <div className='flex shrink-0 items-center'>
-                              <div className='system-xs-regular mr-2 text-text-tertiary'>{langeniusVersionInfo.current_version}</div>
-                              <Indicator color={langeniusVersionInfo.current_version === langeniusVersionInfo.latest_version ? 'green' : 'orange'} />
+                              <div
+                                className='system-xs-regular mr-2 text-text-tertiary'>{langeniusVersionInfo.current_version}</div>
+                              <Indicator
+                                color={langeniusVersionInfo.current_version === langeniusVersionInfo.latest_version ? 'green' : 'orange'}/>
                             </div>
                           </div>
                         </MenuItem>
@@ -193,8 +203,9 @@ export default function AppSelector() {
                           'data-[active]:bg-state-base-hover',
                         )}
                       >
-                        <RiLogoutBoxRLine className='size-4 shrink-0 text-text-tertiary' />
-                        <div className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.logout')}</div>
+                        <RiLogoutBoxRLine className='size-4 shrink-0 text-text-tertiary'/>
+                        <div
+                          className='system-md-regular grow px-1 text-text-secondary'>{t('common.userProfile.logout')}</div>
                       </div>
                     </div>
                   </MenuItem>
@@ -205,8 +216,9 @@ export default function AppSelector() {
         }
       </Menu>
       {
-        aboutVisible && <AccountAbout onCancel={() => setAboutVisible(false)} langeniusVersionInfo={langeniusVersionInfo} />
+        aboutVisible
+        && <AccountAbout onCancel={() => setAboutVisible(false)} langeniusVersionInfo={langeniusVersionInfo}/>
       }
-    </div >
+    </div>
   )
 }

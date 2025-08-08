@@ -47,6 +47,7 @@ const NormalForm = () => {
         })
       }
       const features = await getSystemFeatures()
+      features.enable_marketplace = false
       const allFeatures = { ...defaultSystemFeatures, ...features }
       setSystemFeatures(allFeatures)
       setAllMethodsAreDisabled(!allFeatures.enable_social_oauth_login && !allFeatures.enable_email_code_login && !allFeatures.enable_email_password_login && !allFeatures.sso_enforced_for_signin)

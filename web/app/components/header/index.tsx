@@ -50,7 +50,7 @@ const Header = () => {
   }, [selectedSegment])
   return (
     <div className='relative flex flex-1 items-center justify-between bg-background-body'>
-      <div className='flex items-center'>
+      <div style={{ visibility: 'hidden' }} className='flex items-center'>
         {isMobile && <div
           className='flex h-8 w-8 cursor-pointer items-center justify-center'
           onClick={toggle}
@@ -85,7 +85,7 @@ const Header = () => {
       {
         !isMobile && (
           <div className='absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center'>
-            {!isCurrentWorkspaceDatasetOperator && <ExploreNav className={navClassName} />}
+            {/* {!isCurrentWorkspaceDatasetOperator && <ExploreNav className={navClassName} />} */}
             {!isCurrentWorkspaceDatasetOperator && <AppNav />}
             {(isCurrentWorkspaceEditor || isCurrentWorkspaceDatasetOperator) && <DatasetNav />}
             {!isCurrentWorkspaceDatasetOperator && <ToolsNav className={navClassName} />}
