@@ -1,10 +1,9 @@
 'use client'
 import type { FC } from 'react'
-import React from 'react'
+import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import useSWR from 'swr'
 import Input from '@/app/components/base/input'
-import { fetchAnnotationsCount } from '@/service/log'
+import { useAnnotationsCount } from '@/service/use-log'
 
 export type QueryParam = {
   keyword?: string
@@ -17,25 +16,18 @@ type IFilterProps = {
   children: React.JSX.Element
 }
 
-const Filter: FC<IFilterProps> = ({
-  appId,
-  queryParams,
-  setQueryParams,
-  children,
-}) => {
-  // TODO: change fetch list api
-  const { data } = useSWR({ url: `/apps/${appId}/annotations/count` }, fetchAnnotationsCount)
+const Filter: FC<IFilterProps> = ({ appId, queryParams, setQueryParams, children }) => {
+  const { data, isLoading } = useAnnotationsCount(appId)
   const { t } = useTranslation()
-  if (!data)
-    return null
+  if (isLoading || !data) return null
   return (
-    <div className='mb-2 flex flex-row flex-wrap items-center justify-between gap-2'>
+    <div className="mb-2 flex flex-row flex-wrap items-center justify-between gap-2">
       <Input
-        wrapperClassName='w-[200px]'
+        wrapperClassName="w-[200px]"
         showLeftIcon
         showClearIcon
         value={queryParams.keyword}
-        placeholder={t('common.operation.search')!}
+        placeholder={t(($) => $['operation.search'], { ns: 'common' })!}
         onChange={(e) => {
           setQueryParams({ ...queryParams, keyword: e.target.value })
         }}

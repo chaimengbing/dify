@@ -2,48 +2,53 @@ import logging
 import time
 
 import click
+from sqlalchemy import select
 from werkzeug.exceptions import NotFound
 
+from core.db.session_factory import session_factory
 from core.indexing_runner import DocumentIsPausedError, IndexingRunner
-from events.event_handlers.document_index_event import document_index_created
-from extensions.ext_database import db
+from events.document_index_event import document_index_created
 from libs.datetime_utils import naive_utc_now
 from models.dataset import Document
+from models.enums import IndexingStatus
+
+logger = logging.getLogger(__name__)
 
 
 @document_index_created.connect
 def handle(sender, **kwargs):
     dataset_id = sender
     document_ids = kwargs.get("document_ids", [])
-    documents = []
     start_at = time.perf_counter()
-    for document_id in document_ids:
-        logging.info(click.style(f"Start process document: {document_id}", fg="green"))
-
-        document = (
-            db.session.query(Document)
-            .where(
-                Document.id == document_id,
-                Document.dataset_id == dataset_id,
-            )
-            .first()
-        )
-
-        if not document:
-            raise NotFound("Document not found")
-
-        document.indexing_status = "parsing"
-        document.processing_started_at = naive_utc_now()
-        documents.append(document)
-        db.session.add(document)
-    db.session.commit()
-
     try:
-        indexing_runner = IndexingRunner()
-        indexing_runner.run(documents)
+        indexing_runner = IndexingRunner(enforce_vector_space_admission=True)
+        with session_factory.create_session() as session:
+            documents = []
+            for document_id in document_ids:
+                logger.info(click.style(f"Start process document: {document_id}", fg="green"))
+
+                document = session.scalar(
+                    select(Document).where(
+                        Document.id == document_id,
+                        Document.dataset_id == dataset_id,
+                    )
+                )
+
+                if not document:
+                    raise NotFound("Document not found")
+
+                document.indexing_status = IndexingStatus.PARSING
+                document.processing_started_at = naive_utc_now()
+                documents.append(document)
+                session.add(document)
+            # Persist the status transition before extraction and indexing begin.
+            session.commit()
+
+            indexing_runner.run(documents, session)
+            session.commit()
         end_at = time.perf_counter()
-        logging.info(click.style(f"Processed dataset: {dataset_id} latency: {end_at - start_at}", fg="green"))
+        logger.info(click.style(f"Processed dataset: {dataset_id} latency: {end_at - start_at}", fg="green"))
     except DocumentIsPausedError as ex:
-        logging.info(click.style(str(ex), fg="yellow"))
+        logger.info(click.style(str(ex), fg="yellow"))
     except Exception:
-        pass
+        logger.exception("Document index event handler failed, dataset_id: %s", dataset_id)

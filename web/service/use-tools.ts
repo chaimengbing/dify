@@ -1,17 +1,18 @@
-import { del, get, post, put } from './base'
+import type { QueryKey, UseQueryOptions } from '@tanstack/react-query'
 import type {
   Collection,
+  CollectionProviderType,
   MCPServerDetail,
   Tool,
+  WorkflowToolProviderResponse,
 } from '@/app/components/tools/types'
-import type { ToolWithProvider } from '@/app/components/workflow/types'
+import type { RAGRecommendedPlugins, ToolWithProvider } from '@/app/components/workflow/types'
 import type { AppIconType } from '@/types/app'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CollectionType } from '@/app/components/tools/types'
+import { del, get, post, put } from './base'
+import { consoleClient } from './client'
 import { useInvalid } from './use-base'
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query'
 
 const NAME_SPACE = 'tools'
 
@@ -29,10 +30,11 @@ export const useInvalidateAllToolProviders = () => {
 }
 
 const useAllBuiltInToolsKey = [NAME_SPACE, 'builtIn']
-export const useAllBuiltInTools = () => {
+export const useAllBuiltInTools = (enabled = true) => {
   return useQuery<ToolWithProvider[]>({
     queryKey: useAllBuiltInToolsKey,
     queryFn: () => get<ToolWithProvider[]>('/workspaces/current/tools/builtin'),
+    enabled,
   })
 }
 
@@ -41,10 +43,11 @@ export const useInvalidateAllBuiltInTools = () => {
 }
 
 const useAllCustomToolsKey = [NAME_SPACE, 'customTools']
-export const useAllCustomTools = () => {
+export const useAllCustomTools = (enabled = true) => {
   return useQuery<ToolWithProvider[]>({
     queryKey: useAllCustomToolsKey,
     queryFn: () => get<ToolWithProvider[]>('/workspaces/current/tools/api'),
+    enabled,
   })
 }
 
@@ -53,10 +56,11 @@ export const useInvalidateAllCustomTools = () => {
 }
 
 const useAllWorkflowToolsKey = [NAME_SPACE, 'workflowTools']
-export const useAllWorkflowTools = () => {
+export const useAllWorkflowTools = (enabled = true) => {
   return useQuery<ToolWithProvider[]>({
     queryKey: useAllWorkflowToolsKey,
     queryFn: () => get<ToolWithProvider[]>('/workspaces/current/tools/workflow'),
+    enabled,
   })
 }
 
@@ -65,15 +69,27 @@ export const useInvalidateAllWorkflowTools = () => {
 }
 
 const useAllMCPToolsKey = [NAME_SPACE, 'MCPTools']
-export const useAllMCPTools = () => {
+export const useAllMCPTools = (enabled = true) => {
   return useQuery<ToolWithProvider[]>({
     queryKey: useAllMCPToolsKey,
     queryFn: () => get<ToolWithProvider[]>('/workspaces/current/tools/mcp'),
+    enabled,
   })
 }
 
 export const useInvalidateAllMCPTools = () => {
   return useInvalid(useAllMCPToolsKey)
+}
+
+const useInvalidToolsKeyMap: Partial<Record<CollectionProviderType, QueryKey>> = {
+  [CollectionType.builtIn]: useAllBuiltInToolsKey,
+  [CollectionType.custom]: useAllCustomToolsKey,
+  [CollectionType.workflow]: useAllWorkflowToolsKey,
+  [CollectionType.mcp]: useAllMCPToolsKey,
+}
+export const useInvalidToolsByType = (type?: CollectionProviderType) => {
+  const queryKey = type ? useInvalidToolsKeyMap[type] : undefined
+  return useInvalid(queryKey)
 }
 
 export const useCreateMCP = () => {
@@ -85,6 +101,10 @@ export const useCreateMCP = () => {
       icon_type: AppIconType
       icon: string
       icon_background?: string | null
+      timeout?: number
+      sse_read_timeout?: number
+      headers?: Record<string, string>
+      identity_mode?: 'off' | 'idp_token'
     }) => {
       return post<ToolWithProvider>('workspaces/current/tool-provider/mcp', {
         body: {
@@ -95,11 +115,7 @@ export const useCreateMCP = () => {
   })
 }
 
-export const useUpdateMCP = ({
-  onSuccess,
-}: {
-  onSuccess?: () => void
-}) => {
+export const useUpdateMCP = ({ onSuccess }: { onSuccess?: () => void }) => {
   return useMutation({
     mutationKey: [NAME_SPACE, 'update-mcp'],
     mutationFn: (payload: {
@@ -109,6 +125,10 @@ export const useUpdateMCP = ({
       icon: string
       icon_background?: string | null
       provider_id: string
+      timeout?: number
+      sse_read_timeout?: number
+      headers?: Record<string, string>
+      identity_mode?: 'off' | 'idp_token'
     }) => {
       return put('workspaces/current/tool-provider/mcp', {
         body: {
@@ -120,11 +140,7 @@ export const useUpdateMCP = ({
   })
 }
 
-export const useDeleteMCP = ({
-  onSuccess,
-}: {
-  onSuccess?: () => void
-}) => {
+export const useDeleteMCP = ({ onSuccess }: { onSuccess?: () => void }) => {
   return useMutation({
     mutationKey: [NAME_SPACE, 'delete-mcp'],
     mutationFn: (id: string) => {
@@ -141,23 +157,13 @@ export const useDeleteMCP = ({
 export const useAuthorizeMCP = () => {
   return useMutation({
     mutationKey: [NAME_SPACE, 'authorize-mcp'],
-    mutationFn: (payload: { provider_id: string; }) => {
-      return post<{ result?: string; authorization_url?: string }>('/workspaces/current/tool-provider/mcp/auth', {
-        body: payload,
-      })
-    },
-  })
-}
-
-export const useUpdateMCPAuthorizationToken = () => {
-  return useMutation({
-    mutationKey: [NAME_SPACE, 'refresh-mcp-server-code'],
-    mutationFn: (payload: { provider_id: string; authorization_code: string }) => {
-      return get<MCPServerDetail>('/workspaces/current/tool-provider/mcp/token', {
-        params: {
-          ...payload,
+    mutationFn: (payload: { provider_id: string }) => {
+      return post<{ result?: string; authorization_url?: string }>(
+        '/workspaces/current/tool-provider/mcp/auth',
+        {
+          body: payload,
         },
-      })
+      )
     },
   })
 }
@@ -166,39 +172,40 @@ export const useMCPTools = (providerID: string) => {
   return useQuery({
     enabled: !!providerID,
     queryKey: [NAME_SPACE, 'get-MCP-provider-tool', providerID],
-    queryFn: () => get<{ tools: Tool[] }>(`/workspaces/current/tool-provider/mcp/tools/${providerID}`),
+    queryFn: () =>
+      get<{ tools: Tool[] }>(`/workspaces/current/tool-provider/mcp/tools/${providerID}`),
   })
 }
 export const useInvalidateMCPTools = () => {
   const queryClient = useQueryClient()
   return (providerID: string) => {
-    queryClient.invalidateQueries(
-      {
-        queryKey: [NAME_SPACE, 'get-MCP-provider-tool', providerID],
-      })
+    queryClient.invalidateQueries({
+      queryKey: [NAME_SPACE, 'get-MCP-provider-tool', providerID],
+    })
   }
 }
 
 export const useUpdateMCPTools = () => {
   return useMutation({
-    mutationFn: (providerID: string) => get<{ tools: Tool[] }>(`/workspaces/current/tool-provider/mcp/update/${providerID}`),
+    mutationFn: (providerID: string) =>
+      get<{ tools: Tool[] }>(`/workspaces/current/tool-provider/mcp/update/${providerID}`),
   })
 }
 
-export const useMCPServerDetail = (appID: string) => {
+export const useMCPServerDetail = (appID: string, enabled = true) => {
   return useQuery<MCPServerDetail>({
     queryKey: [NAME_SPACE, 'MCPServerDetail', appID],
     queryFn: () => get<MCPServerDetail>(`/apps/${appID}/server`),
+    enabled,
   })
 }
 
 export const useInvalidateMCPServerDetail = () => {
   const queryClient = useQueryClient()
   return (appID: string) => {
-    queryClient.invalidateQueries(
-      {
-        queryKey: [NAME_SPACE, 'MCPServerDetail', appID],
-      })
+    queryClient.invalidateQueries({
+      queryKey: [NAME_SPACE, 'MCPServerDetail', appID],
+    })
   }
 }
 
@@ -244,66 +251,117 @@ export const useRefreshMCPServerCode = () => {
   return useMutation({
     mutationKey: [NAME_SPACE, 'refresh-mcp-server-code'],
     mutationFn: (appID: string) => {
-      return get<MCPServerDetail>(`apps/${appID}/server/refresh`)
+      return consoleClient.apps.byAppId.server.refresh.post({
+        params: {
+          app_id: appID,
+        },
+      })
     },
   })
 }
 
-export const useBuiltinProviderInfo = (providerName: string) => {
-  return useQuery({
-    queryKey: [NAME_SPACE, 'builtin-provider-info', providerName],
-    queryFn: () => get<Collection>(`/workspaces/current/tool-provider/builtin/${providerName}/info`),
-  })
-}
-
-export const useInvalidateBuiltinProviderInfo = () => {
-  const queryClient = useQueryClient()
-  return (providerName: string) => {
-    queryClient.invalidateQueries(
-      {
-        queryKey: [NAME_SPACE, 'builtin-provider-info', providerName],
-      })
-  }
-}
-
 export const useBuiltinTools = (providerName: string) => {
   return useQuery({
+    enabled: !!providerName,
     queryKey: [NAME_SPACE, 'builtin-provider-tools', providerName],
     queryFn: () => get<Tool[]>(`/workspaces/current/tool-provider/builtin/${providerName}/tools`),
   })
 }
 
-export const useUpdateProviderCredentials = ({
-  onSuccess,
-}: {
-  onSuccess?: () => void
-}) => {
-  return useMutation({
-    mutationKey: [NAME_SPACE, 'update-provider-credentials'],
-    mutationFn: (payload: { providerName: string, credentials: Record<string, any> }) => {
-      const { providerName, credentials } = payload
-      return post(`/workspaces/current/tool-provider/builtin/${providerName}/update`, {
-        body: {
-          credentials,
+const useRAGRecommendedPluginListKey = [NAME_SPACE, 'rag-recommended-plugins']
+
+export const useRAGRecommendedPlugins = (type: 'tool' | 'datasource' | 'all' = 'all') => {
+  return useQuery<RAGRecommendedPlugins>({
+    queryKey: [...useRAGRecommendedPluginListKey, type],
+    queryFn: () =>
+      get<RAGRecommendedPlugins>('/rag/pipelines/recommended-plugins', {
+        params: {
+          type,
         },
-      })
-    },
-    onSuccess,
+      }),
   })
 }
 
-export const useRemoveProviderCredentials = ({
-  onSuccess,
-}: {
-  onSuccess?: () => void
-}) => {
+export const useInvalidateRAGRecommendedPlugins = () => {
+  const queryClient = useQueryClient()
+  return (type: 'tool' | 'datasource' | 'all' = 'all') => {
+    queryClient.invalidateQueries({
+      queryKey: [...useRAGRecommendedPluginListKey, type],
+    })
+  }
+}
+
+// App Triggers API hooks
+export type AppTrigger = {
+  id: string
+  trigger_type: 'trigger-webhook' | 'trigger-schedule' | 'trigger-plugin'
+  title: string
+  node_id: string
+  provider_name: string
+  icon: string
+  status: 'enabled' | 'disabled' | 'unauthorized'
+  created_at: string
+  updated_at: string
+}
+
+export const useAppTriggers = (
+  appId: string | undefined,
+  options?: Omit<UseQueryOptions<{ data: AppTrigger[] }>, 'queryKey' | 'queryFn'>,
+) => {
+  return useQuery<{ data: AppTrigger[] }>({
+    queryKey: [NAME_SPACE, 'app-triggers', appId],
+    queryFn: () => get<{ data: AppTrigger[] }>(`/apps/${appId}/triggers`),
+    enabled: !!appId,
+    ...options, // Merge additional options while maintaining backward compatibility
+  })
+}
+
+export const useInvalidateAppTriggers = () => {
+  const queryClient = useQueryClient()
+  return (appId: string) => {
+    queryClient.invalidateQueries({
+      queryKey: [NAME_SPACE, 'app-triggers', appId],
+    })
+  }
+}
+
+export const useUpdateTriggerStatus = () => {
   return useMutation({
-    mutationKey: [NAME_SPACE, 'remove-provider-credentials'],
-    mutationFn: (providerName: string) => {
-      return post(`/workspaces/current/tool-provider/builtin/${providerName}/delete`, {
-        body: {},
+    mutationKey: [NAME_SPACE, 'update-trigger-status'],
+    mutationFn: (payload: { appId: string; triggerId: string; enableTrigger: boolean }) => {
+      const { appId, triggerId, enableTrigger } = payload
+      return post<AppTrigger>(`/apps/${appId}/trigger-enable`, {
+        body: {
+          trigger_id: triggerId,
+          enable_trigger: enableTrigger,
+        },
       })
     },
-    onSuccess,
   })
+}
+
+const workflowToolDetailByAppIDKey = (appId: string) => [
+  NAME_SPACE,
+  'workflowToolDetailByAppID',
+  appId,
+]
+
+export const useWorkflowToolDetailByAppID = (appId: string, enabled = true) => {
+  return useQuery<WorkflowToolProviderResponse>({
+    queryKey: workflowToolDetailByAppIDKey(appId),
+    queryFn: () =>
+      get<WorkflowToolProviderResponse>(
+        `/workspaces/current/tool-provider/workflow/get?workflow_app_id=${appId}`,
+      ),
+    enabled: enabled && !!appId,
+  })
+}
+
+export const useInvalidateWorkflowToolDetailByAppID = () => {
+  const queryClient = useQueryClient()
+  return (appId: string) => {
+    queryClient.invalidateQueries({
+      queryKey: workflowToolDetailByAppIDKey(appId),
+    })
+  }
 }

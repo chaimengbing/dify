@@ -1,7 +1,7 @@
-import React from 'react'
-import classNames from '@/utils/classnames'
+import { cn } from '@langgenius/dify-ui/cn'
+import * as React from 'react'
 
-export type ITagProps = {
+type ITagProps = {
   children: string | React.ReactNode
   color?: keyof typeof COLOR_MAP
   className?: string
@@ -28,14 +28,23 @@ const COLOR_MAP = {
   },
 }
 
-export default function Tag({ children, color = 'green', className = '', bordered = false, hideBg = false }: ITagProps) {
+export default function Tag({
+  children,
+  color = 'green',
+  className = '',
+  bordered = false,
+  hideBg = false,
+}: ITagProps) {
   return (
-    <div className={
-      classNames('inline-flex shrink-0 items-center rounded-md px-2.5 py-px text-xs leading-5',
+    <div
+      className={cn(
+        'inline-flex shrink-0 items-center rounded-md px-2.5 py-px text-xs/5',
         COLOR_MAP[color] ? `${COLOR_MAP[color].text} ${COLOR_MAP[color].bg}` : '',
-        bordered ? 'border-[1px]' : '',
+        bordered ? 'border border-divider-regular' : '',
         hideBg ? 'bg-transparent' : '',
-        className)} >
+        className,
+      )}
+    >
       {children}
     </div>
   )

@@ -1,18 +1,12 @@
-import {
-  useCallback,
-  useEffect,
-} from 'react'
-import {
-  $getSelection,
-  $isRangeSelection,
-} from 'lexical'
-import { mergeRegister } from '@lexical/utils'
-import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import type { LinkNode } from '@lexical/link'
 import { $isLinkNode } from '@lexical/link'
 import { $isListItemNode } from '@lexical/list'
-import { getSelectedNode } from '../../utils'
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { mergeRegister } from '@lexical/utils'
+import { $getSelection, $isRangeSelection } from 'lexical'
+import { useCallback, useEffect } from 'react'
 import { useNoteEditorStore } from '../../store'
+import { getSelectedNode } from '../../utils'
 
 export const useFormatDetector = () => {
   const [editor] = useLexicalComposerContext()
@@ -20,8 +14,7 @@ export const useFormatDetector = () => {
 
   const handleFormat = useCallback(() => {
     editor.getEditorState().read(() => {
-      if (editor.isComposing())
-        return
+      if (editor.isComposing()) return
 
       const selection = $getSelection()
 
@@ -40,19 +33,16 @@ export const useFormatDetector = () => {
         setSelectedIsStrikeThrough(selection.hasFormat('strikethrough'))
         const parent = node.getParent()
         if ($isLinkNode(parent) || $isLinkNode(node)) {
-          const linkUrl = ($isLinkNode(parent) ? parent : node as LinkNode).getURL()
+          const linkUrl = ($isLinkNode(parent) ? parent : (node as LinkNode)).getURL()
           setSelectedLinkUrl(linkUrl)
           setSelectedIsLink(true)
-        }
-        else {
+        } else {
           setSelectedLinkUrl('')
           setSelectedIsLink(false)
         }
 
-        if ($isListItemNode(parent) || $isListItemNode(node))
-          setSelectedIsBullet(true)
-        else
-          setSelectedIsBullet(false)
+        if ($isListItemNode(parent) || $isListItemNode(node)) setSelectedIsBullet(true)
+        else setSelectedIsBullet(false)
       }
     })
   }, [editor, noteEditorStore])

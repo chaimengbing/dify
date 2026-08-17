@@ -1,3 +1,4 @@
+import type { CredentialTypeEnum, PluginPayload } from '../types'
 import {
   useAddPluginCredential,
   useDeletePluginCredential,
@@ -12,13 +13,23 @@ import {
   useSetPluginOAuthCustomClient,
   useUpdatePluginCredential,
 } from '@/service/use-plugins-auth'
+import { useInvalidToolsByType } from '@/service/use-tools'
 import { useGetApi } from './use-get-api'
-import type { PluginPayload } from '../types'
-import type { CredentialTypeEnum } from '../types'
 
-export const useGetPluginCredentialInfoHook = (pluginPayload: PluginPayload, enable?: boolean) => {
+export const useGetPluginCredentialInfoHook = (
+  pluginPayload: PluginPayload,
+  enable?: boolean,
+  includeCredentialIds?: string[],
+) => {
   const apiMap = useGetApi(pluginPayload)
-  return useGetPluginCredentialInfo(enable ? apiMap.getCredentialInfo : '')
+  const ids = (includeCredentialIds ?? []).filter(Boolean)
+  let url = enable ? apiMap.getCredentialInfo : ''
+  if (url && ids.length > 0) {
+    const qs = new URLSearchParams()
+    for (const id of ids) qs.append('include_credential_ids', id)
+    url = url + (url.includes('?') ? '&' : '?') + qs.toString()
+  }
+  return useGetPluginCredentialInfo(url)
 }
 
 export const useDeletePluginCredentialHook = (pluginPayload: PluginPayload) => {
@@ -29,8 +40,14 @@ export const useDeletePluginCredentialHook = (pluginPayload: PluginPayload) => {
 
 export const useInvalidPluginCredentialInfoHook = (pluginPayload: PluginPayload) => {
   const apiMap = useGetApi(pluginPayload)
+  const invalidPluginCredentialInfo = useInvalidPluginCredentialInfo(apiMap.getCredentialInfo)
+  const providerType = pluginPayload.providerType
+  const invalidToolsByType = useInvalidToolsByType(providerType)
 
-  return useInvalidPluginCredentialInfo(apiMap.getCredentialInfo)
+  return () => {
+    invalidPluginCredentialInfo()
+    invalidToolsByType()
+  }
 }
 
 export const useSetPluginDefaultCredentialHook = (pluginPayload: PluginPayload) => {
@@ -39,7 +56,10 @@ export const useSetPluginDefaultCredentialHook = (pluginPayload: PluginPayload) 
   return useSetPluginDefaultCredential(apiMap.setDefaultCredential)
 }
 
-export const useGetPluginCredentialSchemaHook = (pluginPayload: PluginPayload, credentialType: CredentialTypeEnum) => {
+export const useGetPluginCredentialSchemaHook = (
+  pluginPayload: PluginPayload,
+  credentialType: CredentialTypeEnum,
+) => {
   const apiMap = useGetApi(pluginPayload)
 
   return useGetPluginCredentialSchema(apiMap.getCredentialSchema(credentialType))
@@ -63,10 +83,10 @@ export const useGetPluginOAuthUrlHook = (pluginPayload: PluginPayload) => {
   return useGetPluginOAuthUrl(apiMap.getOauthUrl)
 }
 
-export const useGetPluginOAuthClientSchemaHook = (pluginPayload: PluginPayload) => {
+export const useGetPluginOAuthClientSchemaHook = (pluginPayload: PluginPayload, enabled = true) => {
   const apiMap = useGetApi(pluginPayload)
 
-  return useGetPluginOAuthClientSchema(apiMap.getOauthClientSchema)
+  return useGetPluginOAuthClientSchema(enabled ? apiMap.getOauthClientSchema : '')
 }
 
 export const useInvalidPluginOAuthClientSchemaHook = (pluginPayload: PluginPayload) => {

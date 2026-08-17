@@ -1,5 +1,7 @@
 from collections.abc import Generator
-from typing import Any, Optional
+from typing import Any, override
+
+from sqlalchemy.orm import Session
 
 from core.helper.code_executor.code_executor import CodeExecutor, CodeLanguage
 from core.tools.builtin_tool.tool import BuiltinTool
@@ -8,13 +10,15 @@ from core.tools.errors import ToolInvokeError
 
 
 class SimpleCode(BuiltinTool):
+    @override
     def _invoke(
         self,
+        session: Session,
         user_id: str,
         tool_parameters: dict[str, Any],
-        conversation_id: Optional[str] = None,
-        app_id: Optional[str] = None,
-        message_id: Optional[str] = None,
+        conversation_id: str | None = None,
+        app_id: str | None = None,
+        message_id: str | None = None,
     ) -> Generator[ToolInvokeMessage, None, None]:
         """
         invoke simple code

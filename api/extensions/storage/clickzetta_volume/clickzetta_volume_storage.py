@@ -10,9 +10,9 @@ import tempfile
 from collections.abc import Generator
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
+from typing import Any, override
 
-import clickzetta  # type: ignore[import]
+import clickzetta
 from pydantic import BaseModel, model_validator
 
 from extensions.storage.base_storage import BaseStorage
@@ -33,20 +33,19 @@ class ClickZettaVolumeConfig(BaseModel):
     vcluster: str = "default_ap"
     schema_name: str = "dify"
     volume_type: str = "table"  # table|user|external
-    volume_name: Optional[str] = None  # For external volumes
+    volume_name: str | None = None  # For external volumes
     table_prefix: str = "dataset_"  # Prefix for table volume names
     dify_prefix: str = "dify_km"  # Directory prefix for User Volume
     permission_check: bool = True  # Enable/disable permission checking
 
     @model_validator(mode="before")
     @classmethod
-    def validate_config(cls, values: dict) -> dict:
+    def validate_config(cls, values: dict[str, Any]):
         """Validate the configuration values.
 
         This method will first try to use CLICKZETTA_VOLUME_* environment variables,
         then fall back to CLICKZETTA_* environment variables (for vector DB config).
         """
-        import os
 
         # Helper function to get environment variable with fallback
         def get_env_with_fallback(volume_key: str, fallback_key: str, default: str | None = None) -> str:
@@ -87,7 +86,7 @@ class ClickZettaVolumeConfig(BaseModel):
         values.setdefault("volume_name", os.getenv("CLICKZETTA_VOLUME_NAME"))
         values.setdefault("table_prefix", os.getenv("CLICKZETTA_VOLUME_TABLE_PREFIX", "dataset_"))
         values.setdefault("dify_prefix", os.getenv("CLICKZETTA_VOLUME_DIFY_PREFIX", "dify_km"))
-        # 暂时禁用权限检查功能，直接设置为false
+        # Temporarily disable permission check feature, set directly to false
         values.setdefault("permission_check", False)
 
         # Validate required fields
@@ -139,7 +138,7 @@ class ClickZettaVolumeStorage(BaseStorage):
                 schema=self._config.schema_name,
             )
             logger.debug("ClickZetta connection established")
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to connect to ClickZetta")
             raise
 
@@ -150,11 +149,11 @@ class ClickZettaVolumeStorage(BaseStorage):
                 self._connection, self._config.volume_type, self._config.volume_name
             )
             logger.debug("Permission manager initialized")
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to initialize permission manager")
             raise
 
-    def _get_volume_path(self, filename: str, dataset_id: Optional[str] = None) -> str:
+    def _get_volume_path(self, filename: str, dataset_id: str | None = None) -> str:
         """Get the appropriate volume path based on volume type."""
         if self._config.volume_type == "user":
             # Add dify prefix for User Volume to organize files
@@ -179,7 +178,7 @@ class ClickZettaVolumeStorage(BaseStorage):
         else:
             raise ValueError(f"Unsupported volume type: {self._config.volume_type}")
 
-    def _get_volume_sql_prefix(self, dataset_id: Optional[str] = None) -> str:
+    def _get_volume_sql_prefix(self, dataset_id: str | None = None) -> str:
         """Get SQL prefix for volume operations."""
         if self._config.volume_type == "user":
             return "USER VOLUME"
@@ -213,11 +212,11 @@ class ClickZettaVolumeStorage(BaseStorage):
                 if fetch:
                     return cursor.fetchall()
                 return None
-        except Exception as e:
+        except Exception:
             logger.exception("SQL execution failed: %s", sql)
             raise
 
-    def _ensure_table_volume_exists(self, dataset_id: str) -> None:
+    def _ensure_table_volume_exists(self, dataset_id: str):
         """Ensure table volume exists for the given dataset_id."""
         if self._config.volume_type != "table" or not dataset_id:
             return
@@ -252,7 +251,8 @@ class ClickZettaVolumeStorage(BaseStorage):
             # Don't raise exception, let the operation continue
             # The table might exist but not be visible due to permissions
 
-    def save(self, filename: str, data: bytes) -> None:
+    @override
+    def save(self, filename: str, data: bytes):
         """Save data to ClickZetta Volume.
 
         Args:
@@ -292,7 +292,6 @@ class ClickZettaVolumeStorage(BaseStorage):
 
             # Get the actual volume path (may include dify_km prefix)
             volume_path = self._get_volume_path(filename, dataset_id)
-            actual_filename = volume_path.split("/")[-1] if "/" in volume_path else volume_path
 
             # For User Volume, use the full path with dify_km prefix
             if volume_prefix == "USER VOLUME":
@@ -306,6 +305,7 @@ class ClickZettaVolumeStorage(BaseStorage):
             # Clean up temporary file
             Path(temp_file_path).unlink(missing_ok=True)
 
+    @override
     def load_once(self, filename: str) -> bytes:
         """Load file content from ClickZetta Volume.
 
@@ -350,7 +350,7 @@ class ClickZettaVolumeStorage(BaseStorage):
 
             # Find the downloaded file (may be in subdirectories)
             downloaded_file = None
-            for root, dirs, files in os.walk(temp_dir):
+            for root, _, files in os.walk(temp_dir):
                 for file in files:
                     if file == filename or file == os.path.basename(filename):
                         downloaded_file = Path(root) / file
@@ -366,6 +366,7 @@ class ClickZettaVolumeStorage(BaseStorage):
             logger.debug("File %s loaded from ClickZetta Volume", filename)
             return content
 
+    @override
     def load_stream(self, filename: str) -> Generator:
         """Load file as stream from ClickZetta Volume.
 
@@ -384,6 +385,7 @@ class ClickZettaVolumeStorage(BaseStorage):
 
         logger.debug("File %s loaded as stream from ClickZetta Volume", filename)
 
+    @override
     def download(self, filename: str, target_filepath: str):
         """Download file from ClickZetta Volume to local path.
 
@@ -393,11 +395,11 @@ class ClickZettaVolumeStorage(BaseStorage):
         """
         content = self.load_once(filename)
 
-        with Path(target_filepath).open("wb") as f:
-            f.write(content)
+        Path(target_filepath).write_bytes(content)
 
         logger.debug("File %s downloaded from ClickZetta Volume to %s", filename, target_filepath)
 
+    @override
     def exists(self, filename: str) -> bool:
         """Check if file exists in ClickZetta Volume.
 
@@ -432,13 +434,14 @@ class ClickZettaVolumeStorage(BaseStorage):
 
             rows = self._execute_sql(sql, fetch=True)
 
-            exists = len(rows) > 0
+            exists = len(rows) > 0 if rows else False
             logger.debug("File %s exists check: %s", filename, exists)
             return exists
         except Exception as e:
             logger.warning("Error checking file existence for %s: %s", filename, e)
             return False
 
+    @override
     def delete(self, filename: str):
         """Delete file from ClickZetta Volume.
 
@@ -475,6 +478,7 @@ class ClickZettaVolumeStorage(BaseStorage):
 
         logger.debug("File %s deleted from ClickZetta Volume", filename)
 
+    @override
     def scan(self, path: str, files: bool = True, directories: bool = False) -> list[str]:
         """Scan files and directories in ClickZetta Volume.
 
@@ -511,20 +515,21 @@ class ClickZettaVolumeStorage(BaseStorage):
             rows = self._execute_sql(sql, fetch=True)
 
             result = []
-            for row in rows:
-                file_path = row[0]  # relative_path column
+            if rows:
+                for row in rows:
+                    file_path = row[0]  # relative_path column
 
-                # For User Volume, remove dify prefix from results
-                dify_prefix_with_slash = f"{self._config.dify_prefix}/"
-                if volume_prefix == "USER VOLUME" and file_path.startswith(dify_prefix_with_slash):
-                    file_path = file_path[len(dify_prefix_with_slash) :]  # Remove prefix
+                    # For User Volume, remove dify prefix from results
+                    dify_prefix_with_slash = f"{self._config.dify_prefix}/"
+                    if volume_prefix == "USER VOLUME" and file_path.startswith(dify_prefix_with_slash):
+                        file_path = file_path[len(dify_prefix_with_slash) :]  # Remove prefix
 
-                if files and not file_path.endswith("/") or directories and file_path.endswith("/"):
-                    result.append(file_path)
+                    if files and not file_path.endswith("/") or directories and file_path.endswith("/"):
+                        result.append(file_path)
 
             logger.debug("Scanned %d items in path %s", len(result), path)
             return result
 
-        except Exception as e:
+        except Exception:
             logger.exception("Error scanning path %s", path)
             return []

@@ -1,7 +1,8 @@
 'use client'
 import type { FC } from 'react'
-import React, { useCallback } from 'react'
-import cn from '@/utils/classnames'
+import { cn } from '@langgenius/dify-ui/cn'
+import * as React from 'react'
+import { useCallback } from 'react'
 
 type Option = {
   value: string
@@ -13,17 +14,15 @@ type ItemProps = {
   onClick: () => void
   isSelected: boolean
 }
-const Item: FC<ItemProps> = ({
-  title,
-  onClick,
-  isSelected,
-}) => {
+const Item: FC<ItemProps> = ({ title, onClick, isSelected }) => {
   return (
     <div
       className={cn(
-        'system-sm-regular flex h-8 grow cursor-default items-center rounded-md border border-components-option-card-option-border bg-components-option-card-option-bg px-2 text-text-secondary',
-        !isSelected && 'cursor-pointer hover:border-components-option-card-option-border-hover hover:bg-components-option-card-option-bg-hover hover:shadow-xs',
-        isSelected && 'system-sm-medium border-[1.5px] border-components-option-card-option-selected-border bg-components-option-card-option-selected-bg shadow-xs',
+        'flex h-8 grow cursor-default items-center rounded-md border border-components-option-card-option-border bg-components-option-card-option-bg px-2 system-sm-regular text-text-secondary',
+        !isSelected &&
+          'cursor-pointer hover:border-components-option-card-option-border-hover hover:bg-components-option-card-option-bg-hover hover:shadow-xs',
+        isSelected &&
+          'border-[1.5px] border-components-option-card-option-selected-border bg-components-option-card-option-selected-bg system-sm-medium shadow-xs',
       )}
       onClick={onClick}
     >
@@ -32,23 +31,22 @@ const Item: FC<ItemProps> = ({
   )
 }
 
-type Props = {
+type Props = Readonly<{
   options: Option[]
   value: string
   onChange: (value: string) => void
-}
+}>
 
-const RadioGroup: FC<Props> = ({
-  options,
-  value,
-  onChange,
-}) => {
-  const handleChange = useCallback((value: string) => {
-    return () => onChange(value)
-  }, [onChange])
+const RadioGroup: FC<Props> = ({ options, value, onChange }) => {
+  const handleChange = useCallback(
+    (value: string) => {
+      return () => onChange(value)
+    },
+    [onChange],
+  )
   return (
-    <div className='flex space-x-2'>
-      {options.map(option => (
+    <div className="flex space-x-2">
+      {options.map((option) => (
         <Item
           key={option.value}
           title={option.label}

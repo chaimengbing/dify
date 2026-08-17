@@ -1,22 +1,15 @@
 'use client'
 import type { FC } from 'react'
-import
-React,
-{
-  useCallback,
-  useState,
-} from 'react'
-import cn from 'classnames'
-import {
-  RiArrowDownSLine,
-  RiMenu4Line,
-} from '@remixicon/react'
+import type { NodeTracing } from '@/types/workflow'
+import { cn } from '@langgenius/dify-ui/cn'
+import * as React from 'react'
+import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import formatNodeList from '@/app/components/workflow/run/utils/format-log'
+import { getHoveredParallelId } from './get-hovered-parallel-id'
 import { useLogs } from './hooks'
 import NodePanel from './node'
 import SpecialResultPanel from './special-result-panel'
-import type { NodeTracing } from '@/types/workflow'
-import formatNodeList from '@/app/components/workflow/run/utils/format-log'
 
 type TracingPanelProps = {
   list: NodeTracing[]
@@ -33,17 +26,14 @@ const TracingPanel: FC<TracingPanelProps> = ({
 }) => {
   const { t } = useTranslation()
   const treeNodes = formatNodeList(list, t)
-  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set())
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(() => new Set())
   const [hoveredParallel, setHoveredParallel] = useState<string | null>(null)
 
   const toggleCollapse = (id: string) => {
     setCollapsedNodes((prev) => {
       const newSet = new Set(prev)
-      if (newSet.has(id))
-        newSet.delete(id)
-
-      else
-        newSet.add(id)
+      if (newSet.has(id)) newSet.delete(id)
+      else newSet.add(id)
 
       return newSet
     })
@@ -54,18 +44,7 @@ const TracingPanel: FC<TracingPanelProps> = ({
   }, [])
 
   const handleParallelMouseLeave = useCallback((e: React.MouseEvent) => {
-    const relatedTarget = e.relatedTarget as Element | null
-    if (relatedTarget && 'closest' in relatedTarget) {
-      const closestParallel = relatedTarget.closest('[data-parallel-id]')
-      if (closestParallel)
-        setHoveredParallel(closestParallel.getAttribute('data-parallel-id'))
-
-      else
-        setHoveredParallel(null)
-    }
-    else {
-      setHoveredParallel(null)
-    }
+    setHoveredParallel(getHoveredParallelId(e.relatedTarget))
   }, [])
 
   const {
@@ -110,37 +89,59 @@ const TracingPanel: FC<TracingPanelProps> = ({
         >
           <div className="mb-1 flex items-center">
             <button
+              type="button"
+              aria-controls={`${node.id}-children`}
+              aria-expanded={!isCollapsed}
+              aria-label={parallelDetail.parallelTitle}
               onClick={() => toggleCollapse(node.id)}
               className={cn(
                 'mr-2 transition-colors',
-                isHovered ? 'rounded border-components-button-primary-border bg-components-button-primary-bg text-text-primary-on-surface' : 'text-text-secondary hover:text-text-primary',
+                isHovered
+                  ? 'rounded-sm border-components-button-primary-border bg-components-button-primary-bg text-text-primary-on-surface'
+                  : 'text-text-secondary hover:text-text-primary',
               )}
             >
-              {isHovered ? <RiArrowDownSLine className="h-3 w-3" /> : <RiMenu4Line className="h-3 w-3 text-text-tertiary" />}
+              {isHovered ? (
+                <span aria-hidden className="i-ri-arrow-down-s-line size-3" />
+              ) : (
+                <span aria-hidden className="i-ri-menu-4-line size-3 text-text-tertiary" />
+              )}
             </button>
-            <div className="system-xs-semibold-uppercase flex items-center text-text-secondary">
+            <div className="flex items-center system-xs-semibold-uppercase text-text-secondary">
               <span>{parallelDetail.parallelTitle}</span>
             </div>
             <div
               className="mx-2 h-px grow bg-divider-subtle"
-              style={{ background: 'linear-gradient(to right, rgba(16, 24, 40, 0.08), rgba(255, 255, 255, 0)' }}
+              style={{
+                background:
+                  'linear-gradient(to right, rgba(16, 24, 40, 0.08), rgba(255, 255, 255, 0)',
+              }}
             ></div>
           </div>
-          <div className={`relative pl-2 ${isCollapsed ? 'hidden' : ''}`}>
-            <div className={cn(
-              'absolute bottom-0 left-[5px] top-0 w-[2px]',
-              isHovered ? 'bg-text-accent-secondary' : 'bg-divider-subtle',
-            )}></div>
+          <div
+            id={`${node.id}-children`}
+            className={`relative pl-2 ${isCollapsed ? 'hidden' : ''}`}
+          >
+            <div
+              className={cn(
+                'absolute top-0 bottom-0 left-1.25 w-0.5',
+                isHovered ? 'bg-text-accent-secondary' : 'bg-divider-subtle',
+              )}
+            ></div>
             {parallelDetail.children!.map(renderNode)}
           </div>
         </div>
       )
-    }
-    else {
+    } else {
       const isHovered = hoveredParallel === node.id
       return (
         <div key={node.id}>
-          <div className={cn('system-2xs-medium-uppercase -mb-1.5 pl-4', isHovered ? 'text-text-tertiary' : 'text-text-quaternary')}>
+          <div
+            className={cn(
+              '-mb-1.5 pl-4 system-2xs-medium-uppercase',
+              isHovered ? 'text-text-tertiary' : 'text-text-quaternary',
+            )}
+          >
             {node?.parallelDetail?.branchTitle}
           </div>
           <NodePanel
@@ -164,18 +165,15 @@ const TracingPanel: FC<TracingPanelProps> = ({
         showRetryDetail={showRetryDetail}
         setShowRetryDetailFalse={setShowRetryDetailFalse}
         retryResultList={retryResultList}
-
         showIteratingDetail={showIteratingDetail}
         setShowIteratingDetailFalse={setShowIteratingDetailFalse}
         iterationResultList={iterationResultList}
         iterationResultDurationMap={iterationResultDurationMap}
-
         showLoopingDetail={showLoopingDetail}
         setShowLoopingDetailFalse={setShowLoopingDetailFalse}
         loopResultList={loopResultList}
         loopResultDurationMap={loopResultDurationMap}
         loopResultVariableMap={loopResultVariableMap}
-
         agentOrToolLogItemStack={agentOrToolLogItemStack}
         agentOrToolLogListMap={agentOrToolLogListMap}
         handleShowAgentOrToolLog={handleShowAgentOrToolLog}

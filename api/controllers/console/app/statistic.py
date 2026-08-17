@@ -1,64 +1,192 @@
-from datetime import datetime
 from decimal import Decimal
 
-import pytz
 import sqlalchemy as sa
-from flask import jsonify
-from flask_login import current_user
-from flask_restful import Resource, reqparse
+from flask import abort
+from flask_restx import Resource
+from pydantic import BaseModel, Field, field_validator
 
-from controllers.console import api
+from controllers.common.schema import query_params_from_model, register_response_schema_models, register_schema_models
+from controllers.console import console_ns
 from controllers.console.app.wraps import get_app_model
-from controllers.console.wraps import account_initialization_required, setup_required
+from controllers.console.wraps import (
+    RBACPermission,
+    RBACResourceScope,
+    account_initialization_required,
+    model_validate,
+    rbac_permission_required,
+    setup_required,
+    with_current_user,
+)
 from core.app.entities.app_invoke_entities import InvokeFrom
 from extensions.ext_database import db
-from libs.helper import DatetimeString
+from fields.base import ResponseModel
+from libs.datetime_utils import parse_time_range
+from libs.helper import convert_datetime_to_date, dump_response
 from libs.login import login_required
-from models import AppMode, Message
+from models import AppMode
+from models.account import Account
+from models.model import App
 
 
+class StatisticTimeRangeQuery(BaseModel):
+    start: str | None = Field(default=None, description="Start date (YYYY-MM-DD HH:MM)")
+    end: str | None = Field(default=None, description="End date (YYYY-MM-DD HH:MM)")
+
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, value: str | None) -> str | None:
+        if value == "":
+            return None
+        return value
+
+
+class DailyMessageStatisticItem(ResponseModel):
+    date: str
+    message_count: int
+
+
+register_schema_models(console_ns, StatisticTimeRangeQuery)
+
+
+class StatisticDataResponse[T](ResponseModel):
+    data: list[T]
+
+
+class DailyMessageStatisticResponse(StatisticDataResponse[DailyMessageStatisticItem]):
+    pass
+
+
+class DailyConversationStatisticItem(ResponseModel):
+    date: str
+    conversation_count: int
+
+
+class DailyConversationStatisticResponse(StatisticDataResponse[DailyConversationStatisticItem]):
+    pass
+
+
+class DailyTerminalStatisticItem(ResponseModel):
+    date: str
+    terminal_count: int
+
+
+class DailyTerminalStatisticResponse(StatisticDataResponse[DailyTerminalStatisticItem]):
+    pass
+
+
+class DailyTokenCostStatisticItem(ResponseModel):
+    date: str
+    token_count: int | None = None
+    total_price: Decimal | None = None
+    currency: str | None = None
+
+
+class DailyTokenCostStatisticResponse(StatisticDataResponse[DailyTokenCostStatisticItem]):
+    pass
+
+
+class AverageSessionInteractionStatisticItem(ResponseModel):
+    date: str
+    interactions: float
+
+
+class AverageSessionInteractionStatisticResponse(StatisticDataResponse[AverageSessionInteractionStatisticItem]):
+    pass
+
+
+class UserSatisfactionRateStatisticItem(ResponseModel):
+    date: str
+    rate: float
+
+
+class UserSatisfactionRateStatisticResponse(StatisticDataResponse[UserSatisfactionRateStatisticItem]):
+    pass
+
+
+class AverageResponseTimeStatisticItem(ResponseModel):
+    date: str
+    latency: float
+
+
+class AverageResponseTimeStatisticResponse(StatisticDataResponse[AverageResponseTimeStatisticItem]):
+    pass
+
+
+class TokensPerSecondStatisticItem(ResponseModel):
+    date: str
+    tps: float
+
+
+class TokensPerSecondStatisticResponse(StatisticDataResponse[TokensPerSecondStatisticItem]):
+    pass
+
+
+register_response_schema_models(
+    console_ns,
+    DailyMessageStatisticItem,
+    DailyMessageStatisticResponse,
+    DailyConversationStatisticItem,
+    DailyConversationStatisticResponse,
+    DailyTerminalStatisticItem,
+    DailyTerminalStatisticResponse,
+    DailyTokenCostStatisticItem,
+    DailyTokenCostStatisticResponse,
+    AverageSessionInteractionStatisticItem,
+    AverageSessionInteractionStatisticResponse,
+    UserSatisfactionRateStatisticItem,
+    UserSatisfactionRateStatisticResponse,
+    AverageResponseTimeStatisticItem,
+    AverageResponseTimeStatisticResponse,
+    TokensPerSecondStatisticItem,
+    TokensPerSecondStatisticResponse,
+)
+
+
+@console_ns.route("/apps/<uuid:app_id>/statistics/daily-messages")
 class DailyMessageStatistic(Resource):
+    @console_ns.doc("get_daily_message_statistics")
+    @console_ns.doc(description="Get daily message statistics for an application")
+    @console_ns.doc(params={"app_id": "Application ID", **query_params_from_model(StatisticTimeRangeQuery)})
+    @console_ns.response(
+        200,
+        "Daily message statistics retrieved successfully",
+        console_ns.models[DailyMessageStatisticResponse.__name__],
+    )
     @setup_required
     @login_required
     @account_initialization_required
+    @with_current_user
+    @rbac_permission_required(RBACResourceScope.APP, RBACPermission.APP_MONITOR)
     @get_app_model
-    def get(self, app_model):
-        account = current_user
+    @model_validate(StatisticTimeRangeQuery)
+    def get(self, req_data: StatisticTimeRangeQuery, account: Account, app_model: App):
 
-        parser = reqparse.RequestParser()
-        parser.add_argument("start", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        parser.add_argument("end", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        args = parser.parse_args()
-
-        sql_query = """SELECT
-    DATE(DATE_TRUNC('day', created_at AT TIME ZONE 'UTC' AT TIME ZONE :tz )) AS date,
+        converted_created_at = convert_datetime_to_date("created_at")
+        sql_query = f"""SELECT
+    {converted_created_at} AS date,
     COUNT(*) AS message_count
 FROM
     messages
 WHERE
-    app_id = :app_id"""
-        arg_dict = {"tz": account.timezone, "app_id": app_model.id}
+    app_id = :app_id
+    AND invoke_from != :invoke_from"""
+        assert account.timezone is not None
+        arg_dict: dict[str, object] = {
+            "tz": account.timezone,
+            "app_id": app_model.id,
+            "invoke_from": InvokeFrom.DEBUGGER,
+        }
 
-        timezone = pytz.timezone(account.timezone)
-        utc_timezone = pytz.utc
+        try:
+            start_datetime_utc, end_datetime_utc = parse_time_range(req_data.start, req_data.end, account.timezone)
+        except ValueError as e:
+            abort(400, description=str(e))
 
-        if args["start"]:
-            start_datetime = datetime.strptime(args["start"], "%Y-%m-%d %H:%M")
-            start_datetime = start_datetime.replace(second=0)
-
-            start_datetime_timezone = timezone.localize(start_datetime)
-            start_datetime_utc = start_datetime_timezone.astimezone(utc_timezone)
-
+        if start_datetime_utc:
             sql_query += " AND created_at >= :start"
             arg_dict["start"] = start_datetime_utc
 
-        if args["end"]:
-            end_datetime = datetime.strptime(args["end"], "%Y-%m-%d %H:%M")
-            end_datetime = end_datetime.replace(second=0)
-
-            end_datetime_timezone = timezone.localize(end_datetime)
-            end_datetime_utc = end_datetime_timezone.astimezone(utc_timezone)
-
+        if end_datetime_utc:
             sql_query += " AND created_at < :end"
             arg_dict["end"] = end_datetime_utc
 
@@ -71,103 +199,113 @@ WHERE
             for i in rs:
                 response_data.append({"date": str(i.date), "message_count": i.message_count})
 
-        return jsonify({"data": response_data})
+        return dump_response(DailyMessageStatisticResponse, {"data": response_data})
 
 
+@console_ns.route("/apps/<uuid:app_id>/statistics/daily-conversations")
 class DailyConversationStatistic(Resource):
+    @console_ns.doc("get_daily_conversation_statistics")
+    @console_ns.doc(description="Get daily conversation statistics for an application")
+    @console_ns.doc(params={"app_id": "Application ID", **query_params_from_model(StatisticTimeRangeQuery)})
+    @console_ns.response(
+        200,
+        "Daily conversation statistics retrieved successfully",
+        console_ns.models[DailyConversationStatisticResponse.__name__],
+    )
     @setup_required
     @login_required
     @account_initialization_required
+    @with_current_user
+    @rbac_permission_required(RBACResourceScope.APP, RBACPermission.APP_MONITOR)
     @get_app_model
-    def get(self, app_model):
-        account = current_user
+    @model_validate(StatisticTimeRangeQuery)
+    def get(self, req_data: StatisticTimeRangeQuery, account: Account, app_model: App):
 
-        parser = reqparse.RequestParser()
-        parser.add_argument("start", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        parser.add_argument("end", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        args = parser.parse_args()
+        converted_created_at = convert_datetime_to_date("created_at")
+        sql_query = f"""SELECT
+    {converted_created_at} AS date,
+    COUNT(DISTINCT conversation_id) AS conversation_count
+FROM
+    messages
+WHERE
+    app_id = :app_id
+    AND invoke_from != :invoke_from"""
+        assert account.timezone is not None
+        arg_dict: dict[str, object] = {
+            "tz": account.timezone,
+            "app_id": app_model.id,
+            "invoke_from": InvokeFrom.DEBUGGER,
+        }
 
-        timezone = pytz.timezone(account.timezone)
-        utc_timezone = pytz.utc
+        try:
+            start_datetime_utc, end_datetime_utc = parse_time_range(req_data.start, req_data.end, account.timezone)
+        except ValueError as e:
+            abort(400, description=str(e))
 
-        stmt = (
-            sa.select(
-                sa.func.date(
-                    sa.func.date_trunc("day", sa.text("created_at AT TIME ZONE 'UTC' AT TIME ZONE :tz"))
-                ).label("date"),
-                sa.func.count(sa.distinct(Message.conversation_id)).label("conversation_count"),
-            )
-            .select_from(Message)
-            .where(Message.app_id == app_model.id, Message.invoke_from != InvokeFrom.DEBUGGER.value)
-        )
+        if start_datetime_utc:
+            sql_query += " AND created_at >= :start"
+            arg_dict["start"] = start_datetime_utc
 
-        if args["start"]:
-            start_datetime = datetime.strptime(args["start"], "%Y-%m-%d %H:%M")
-            start_datetime = start_datetime.replace(second=0)
-            start_datetime_timezone = timezone.localize(start_datetime)
-            start_datetime_utc = start_datetime_timezone.astimezone(utc_timezone)
-            stmt = stmt.where(Message.created_at >= start_datetime_utc)
+        if end_datetime_utc:
+            sql_query += " AND created_at < :end"
+            arg_dict["end"] = end_datetime_utc
 
-        if args["end"]:
-            end_datetime = datetime.strptime(args["end"], "%Y-%m-%d %H:%M")
-            end_datetime = end_datetime.replace(second=0)
-            end_datetime_timezone = timezone.localize(end_datetime)
-            end_datetime_utc = end_datetime_timezone.astimezone(utc_timezone)
-            stmt = stmt.where(Message.created_at < end_datetime_utc)
-
-        stmt = stmt.group_by("date").order_by("date")
+        sql_query += " GROUP BY date ORDER BY date"
 
         response_data = []
         with db.engine.begin() as conn:
-            rs = conn.execute(stmt, {"tz": account.timezone})
-            for row in rs:
-                response_data.append({"date": str(row.date), "conversation_count": row.conversation_count})
+            rs = conn.execute(sa.text(sql_query), arg_dict)
+            for i in rs:
+                response_data.append({"date": str(i.date), "conversation_count": i.conversation_count})
 
-        return jsonify({"data": response_data})
+        return dump_response(DailyConversationStatisticResponse, {"data": response_data})
 
 
+@console_ns.route("/apps/<uuid:app_id>/statistics/daily-end-users")
 class DailyTerminalsStatistic(Resource):
+    @console_ns.doc("get_daily_terminals_statistics")
+    @console_ns.doc(description="Get daily terminal/end-user statistics for an application")
+    @console_ns.doc(params={"app_id": "Application ID", **query_params_from_model(StatisticTimeRangeQuery)})
+    @console_ns.response(
+        200,
+        "Daily terminal statistics retrieved successfully",
+        console_ns.models[DailyTerminalStatisticResponse.__name__],
+    )
     @setup_required
     @login_required
     @account_initialization_required
+    @with_current_user
+    @rbac_permission_required(RBACResourceScope.APP, RBACPermission.APP_MONITOR)
     @get_app_model
-    def get(self, app_model):
-        account = current_user
+    @model_validate(StatisticTimeRangeQuery)
+    def get(self, req_data: StatisticTimeRangeQuery, account: Account, app_model: App):
 
-        parser = reqparse.RequestParser()
-        parser.add_argument("start", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        parser.add_argument("end", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        args = parser.parse_args()
-
-        sql_query = """SELECT
-    DATE(DATE_TRUNC('day', created_at AT TIME ZONE 'UTC' AT TIME ZONE :tz )) AS date,
+        converted_created_at = convert_datetime_to_date("created_at")
+        sql_query = f"""SELECT
+    {converted_created_at} AS date,
     COUNT(DISTINCT messages.from_end_user_id) AS terminal_count
 FROM
     messages
 WHERE
-    app_id = :app_id"""
-        arg_dict = {"tz": account.timezone, "app_id": app_model.id}
+    app_id = :app_id
+    AND invoke_from != :invoke_from"""
+        assert account.timezone is not None
+        arg_dict: dict[str, object] = {
+            "tz": account.timezone,
+            "app_id": app_model.id,
+            "invoke_from": InvokeFrom.DEBUGGER,
+        }
 
-        timezone = pytz.timezone(account.timezone)
-        utc_timezone = pytz.utc
+        try:
+            start_datetime_utc, end_datetime_utc = parse_time_range(req_data.start, req_data.end, account.timezone)
+        except ValueError as e:
+            abort(400, description=str(e))
 
-        if args["start"]:
-            start_datetime = datetime.strptime(args["start"], "%Y-%m-%d %H:%M")
-            start_datetime = start_datetime.replace(second=0)
-
-            start_datetime_timezone = timezone.localize(start_datetime)
-            start_datetime_utc = start_datetime_timezone.astimezone(utc_timezone)
-
+        if start_datetime_utc:
             sql_query += " AND created_at >= :start"
             arg_dict["start"] = start_datetime_utc
 
-        if args["end"]:
-            end_datetime = datetime.strptime(args["end"], "%Y-%m-%d %H:%M")
-            end_datetime = end_datetime.replace(second=0)
-
-            end_datetime_timezone = timezone.localize(end_datetime)
-            end_datetime_utc = end_datetime_timezone.astimezone(utc_timezone)
-
+        if end_datetime_utc:
             sql_query += " AND created_at < :end"
             arg_dict["end"] = end_datetime_utc
 
@@ -180,52 +318,55 @@ WHERE
             for i in rs:
                 response_data.append({"date": str(i.date), "terminal_count": i.terminal_count})
 
-        return jsonify({"data": response_data})
+        return dump_response(DailyTerminalStatisticResponse, {"data": response_data})
 
 
+@console_ns.route("/apps/<uuid:app_id>/statistics/token-costs")
 class DailyTokenCostStatistic(Resource):
+    @console_ns.doc("get_daily_token_cost_statistics")
+    @console_ns.doc(description="Get daily token cost statistics for an application")
+    @console_ns.doc(params={"app_id": "Application ID", **query_params_from_model(StatisticTimeRangeQuery)})
+    @console_ns.response(
+        200,
+        "Daily token cost statistics retrieved successfully",
+        console_ns.models[DailyTokenCostStatisticResponse.__name__],
+    )
     @setup_required
     @login_required
     @account_initialization_required
+    @with_current_user
+    @rbac_permission_required(RBACResourceScope.APP, RBACPermission.APP_MONITOR)
     @get_app_model
-    def get(self, app_model):
-        account = current_user
+    @model_validate(StatisticTimeRangeQuery)
+    def get(self, req_data: StatisticTimeRangeQuery, account: Account, app_model: App):
 
-        parser = reqparse.RequestParser()
-        parser.add_argument("start", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        parser.add_argument("end", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        args = parser.parse_args()
-
-        sql_query = """SELECT
-    DATE(DATE_TRUNC('day', created_at AT TIME ZONE 'UTC' AT TIME ZONE :tz )) AS date,
+        converted_created_at = convert_datetime_to_date("created_at")
+        sql_query = f"""SELECT
+    {converted_created_at} AS date,
     (SUM(messages.message_tokens) + SUM(messages.answer_tokens)) AS token_count,
     SUM(total_price) AS total_price
 FROM
     messages
 WHERE
-    app_id = :app_id"""
-        arg_dict = {"tz": account.timezone, "app_id": app_model.id}
+    app_id = :app_id
+    AND invoke_from != :invoke_from"""
+        assert account.timezone is not None
+        arg_dict: dict[str, object] = {
+            "tz": account.timezone,
+            "app_id": app_model.id,
+            "invoke_from": InvokeFrom.DEBUGGER,
+        }
 
-        timezone = pytz.timezone(account.timezone)
-        utc_timezone = pytz.utc
+        try:
+            start_datetime_utc, end_datetime_utc = parse_time_range(req_data.start, req_data.end, account.timezone)
+        except ValueError as e:
+            abort(400, description=str(e))
 
-        if args["start"]:
-            start_datetime = datetime.strptime(args["start"], "%Y-%m-%d %H:%M")
-            start_datetime = start_datetime.replace(second=0)
-
-            start_datetime_timezone = timezone.localize(start_datetime)
-            start_datetime_utc = start_datetime_timezone.astimezone(utc_timezone)
-
+        if start_datetime_utc:
             sql_query += " AND created_at >= :start"
             arg_dict["start"] = start_datetime_utc
 
-        if args["end"]:
-            end_datetime = datetime.strptime(args["end"], "%Y-%m-%d %H:%M")
-            end_datetime = end_datetime.replace(second=0)
-
-            end_datetime_timezone = timezone.localize(end_datetime)
-            end_datetime_utc = end_datetime_timezone.astimezone(utc_timezone)
-
+        if end_datetime_utc:
             sql_query += " AND created_at < :end"
             arg_dict["end"] = end_datetime_utc
 
@@ -240,24 +381,31 @@ WHERE
                     {"date": str(i.date), "token_count": i.token_count, "total_price": i.total_price, "currency": "USD"}
                 )
 
-        return jsonify({"data": response_data})
+        return dump_response(DailyTokenCostStatisticResponse, {"data": response_data})
 
 
+@console_ns.route("/apps/<uuid:app_id>/statistics/average-session-interactions")
 class AverageSessionInteractionStatistic(Resource):
+    @console_ns.doc("get_average_session_interaction_statistics")
+    @console_ns.doc(description="Get average session interaction statistics for an application")
+    @console_ns.doc(params={"app_id": "Application ID", **query_params_from_model(StatisticTimeRangeQuery)})
+    @console_ns.response(
+        200,
+        "Average session interaction statistics retrieved successfully",
+        console_ns.models[AverageSessionInteractionStatisticResponse.__name__],
+    )
     @setup_required
     @login_required
     @account_initialization_required
-    @get_app_model(mode=[AppMode.CHAT, AppMode.AGENT_CHAT, AppMode.ADVANCED_CHAT])
-    def get(self, app_model):
-        account = current_user
+    @with_current_user
+    @rbac_permission_required(RBACResourceScope.APP, RBACPermission.APP_MONITOR)
+    @get_app_model(mode=[AppMode.CHAT, AppMode.AGENT_CHAT, AppMode.ADVANCED_CHAT, AppMode.AGENT])
+    @model_validate(StatisticTimeRangeQuery)
+    def get(self, req_data: StatisticTimeRangeQuery, account: Account, app_model: App):
 
-        parser = reqparse.RequestParser()
-        parser.add_argument("start", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        parser.add_argument("end", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        args = parser.parse_args()
-
-        sql_query = """SELECT
-    DATE(DATE_TRUNC('day', c.created_at AT TIME ZONE 'UTC' AT TIME ZONE :tz )) AS date,
+        converted_created_at = convert_datetime_to_date("c.created_at")
+        sql_query = f"""SELECT
+    {converted_created_at} AS date,
     AVG(subquery.message_count) AS interactions
 FROM
     (
@@ -270,29 +418,25 @@ FROM
             messages m
             ON c.id = m.conversation_id
         WHERE
-            c.app_id = :app_id"""
-        arg_dict = {"tz": account.timezone, "app_id": app_model.id}
+            c.app_id = :app_id
+            AND m.invoke_from != :invoke_from"""
+        assert account.timezone is not None
+        arg_dict: dict[str, object] = {
+            "tz": account.timezone,
+            "app_id": app_model.id,
+            "invoke_from": InvokeFrom.DEBUGGER,
+        }
 
-        timezone = pytz.timezone(account.timezone)
-        utc_timezone = pytz.utc
+        try:
+            start_datetime_utc, end_datetime_utc = parse_time_range(req_data.start, req_data.end, account.timezone)
+        except ValueError as e:
+            abort(400, description=str(e))
 
-        if args["start"]:
-            start_datetime = datetime.strptime(args["start"], "%Y-%m-%d %H:%M")
-            start_datetime = start_datetime.replace(second=0)
-
-            start_datetime_timezone = timezone.localize(start_datetime)
-            start_datetime_utc = start_datetime_timezone.astimezone(utc_timezone)
-
+        if start_datetime_utc:
             sql_query += " AND c.created_at >= :start"
             arg_dict["start"] = start_datetime_utc
 
-        if args["end"]:
-            end_datetime = datetime.strptime(args["end"], "%Y-%m-%d %H:%M")
-            end_datetime = end_datetime.replace(second=0)
-
-            end_datetime_timezone = timezone.localize(end_datetime)
-            end_datetime_utc = end_datetime_timezone.astimezone(utc_timezone)
-
+        if end_datetime_utc:
             sql_query += " AND c.created_at < :end"
             arg_dict["end"] = end_datetime_utc
 
@@ -316,24 +460,31 @@ ORDER BY
                     {"date": str(i.date), "interactions": float(i.interactions.quantize(Decimal("0.01")))}
                 )
 
-        return jsonify({"data": response_data})
+        return dump_response(AverageSessionInteractionStatisticResponse, {"data": response_data})
 
 
+@console_ns.route("/apps/<uuid:app_id>/statistics/user-satisfaction-rate")
 class UserSatisfactionRateStatistic(Resource):
+    @console_ns.doc("get_user_satisfaction_rate_statistics")
+    @console_ns.doc(description="Get user satisfaction rate statistics for an application")
+    @console_ns.doc(params={"app_id": "Application ID", **query_params_from_model(StatisticTimeRangeQuery)})
+    @console_ns.response(
+        200,
+        "User satisfaction rate statistics retrieved successfully",
+        console_ns.models[UserSatisfactionRateStatisticResponse.__name__],
+    )
     @setup_required
     @login_required
     @account_initialization_required
+    @with_current_user
+    @rbac_permission_required(RBACResourceScope.APP, RBACPermission.APP_MONITOR)
     @get_app_model
-    def get(self, app_model):
-        account = current_user
+    @model_validate(StatisticTimeRangeQuery)
+    def get(self, req_data: StatisticTimeRangeQuery, account: Account, app_model: App):
 
-        parser = reqparse.RequestParser()
-        parser.add_argument("start", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        parser.add_argument("end", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        args = parser.parse_args()
-
-        sql_query = """SELECT
-    DATE(DATE_TRUNC('day', m.created_at AT TIME ZONE 'UTC' AT TIME ZONE :tz )) AS date,
+        converted_created_at = convert_datetime_to_date("m.created_at")
+        sql_query = f"""SELECT
+    {converted_created_at} AS date,
     COUNT(m.id) AS message_count,
     COUNT(mf.id) AS feedback_count
 FROM
@@ -342,29 +493,25 @@ LEFT JOIN
     message_feedbacks mf
     ON mf.message_id=m.id AND mf.rating='like'
 WHERE
-    m.app_id = :app_id"""
-        arg_dict = {"tz": account.timezone, "app_id": app_model.id}
+    m.app_id = :app_id
+    AND m.invoke_from != :invoke_from"""
+        assert account.timezone is not None
+        arg_dict: dict[str, object] = {
+            "tz": account.timezone,
+            "app_id": app_model.id,
+            "invoke_from": InvokeFrom.DEBUGGER,
+        }
 
-        timezone = pytz.timezone(account.timezone)
-        utc_timezone = pytz.utc
+        try:
+            start_datetime_utc, end_datetime_utc = parse_time_range(req_data.start, req_data.end, account.timezone)
+        except ValueError as e:
+            abort(400, description=str(e))
 
-        if args["start"]:
-            start_datetime = datetime.strptime(args["start"], "%Y-%m-%d %H:%M")
-            start_datetime = start_datetime.replace(second=0)
-
-            start_datetime_timezone = timezone.localize(start_datetime)
-            start_datetime_utc = start_datetime_timezone.astimezone(utc_timezone)
-
+        if start_datetime_utc:
             sql_query += " AND m.created_at >= :start"
             arg_dict["start"] = start_datetime_utc
 
-        if args["end"]:
-            end_datetime = datetime.strptime(args["end"], "%Y-%m-%d %H:%M")
-            end_datetime = end_datetime.replace(second=0)
-
-            end_datetime_timezone = timezone.localize(end_datetime)
-            end_datetime_utc = end_datetime_timezone.astimezone(utc_timezone)
-
+        if end_datetime_utc:
             sql_query += " AND m.created_at < :end"
             arg_dict["end"] = end_datetime_utc
 
@@ -382,51 +529,54 @@ WHERE
                     }
                 )
 
-        return jsonify({"data": response_data})
+        return dump_response(UserSatisfactionRateStatisticResponse, {"data": response_data})
 
 
+@console_ns.route("/apps/<uuid:app_id>/statistics/average-response-time")
 class AverageResponseTimeStatistic(Resource):
+    @console_ns.doc("get_average_response_time_statistics")
+    @console_ns.doc(description="Get average response time statistics for an application")
+    @console_ns.doc(params={"app_id": "Application ID", **query_params_from_model(StatisticTimeRangeQuery)})
+    @console_ns.response(
+        200,
+        "Average response time statistics retrieved successfully",
+        console_ns.models[AverageResponseTimeStatisticResponse.__name__],
+    )
     @setup_required
     @login_required
     @account_initialization_required
+    @with_current_user
+    @rbac_permission_required(RBACResourceScope.APP, RBACPermission.APP_MONITOR)
     @get_app_model(mode=AppMode.COMPLETION)
-    def get(self, app_model):
-        account = current_user
+    @model_validate(StatisticTimeRangeQuery)
+    def get(self, req_data: StatisticTimeRangeQuery, account: Account, app_model: App):
 
-        parser = reqparse.RequestParser()
-        parser.add_argument("start", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        parser.add_argument("end", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        args = parser.parse_args()
-
-        sql_query = """SELECT
-    DATE(DATE_TRUNC('day', created_at AT TIME ZONE 'UTC' AT TIME ZONE :tz )) AS date,
+        converted_created_at = convert_datetime_to_date("created_at")
+        sql_query = f"""SELECT
+    {converted_created_at} AS date,
     AVG(provider_response_latency) AS latency
 FROM
     messages
 WHERE
-    app_id = :app_id"""
-        arg_dict = {"tz": account.timezone, "app_id": app_model.id}
+    app_id = :app_id
+    AND invoke_from != :invoke_from"""
+        assert account.timezone is not None
+        arg_dict: dict[str, object] = {
+            "tz": account.timezone,
+            "app_id": app_model.id,
+            "invoke_from": InvokeFrom.DEBUGGER,
+        }
 
-        timezone = pytz.timezone(account.timezone)
-        utc_timezone = pytz.utc
+        try:
+            start_datetime_utc, end_datetime_utc = parse_time_range(req_data.start, req_data.end, account.timezone)
+        except ValueError as e:
+            abort(400, description=str(e))
 
-        if args["start"]:
-            start_datetime = datetime.strptime(args["start"], "%Y-%m-%d %H:%M")
-            start_datetime = start_datetime.replace(second=0)
-
-            start_datetime_timezone = timezone.localize(start_datetime)
-            start_datetime_utc = start_datetime_timezone.astimezone(utc_timezone)
-
+        if start_datetime_utc:
             sql_query += " AND created_at >= :start"
             arg_dict["start"] = start_datetime_utc
 
-        if args["end"]:
-            end_datetime = datetime.strptime(args["end"], "%Y-%m-%d %H:%M")
-            end_datetime = end_datetime.replace(second=0)
-
-            end_datetime_timezone = timezone.localize(end_datetime)
-            end_datetime_utc = end_datetime_timezone.astimezone(utc_timezone)
-
+        if end_datetime_utc:
             sql_query += " AND created_at < :end"
             arg_dict["end"] = end_datetime_utc
 
@@ -439,24 +589,31 @@ WHERE
             for i in rs:
                 response_data.append({"date": str(i.date), "latency": round(i.latency * 1000, 4)})
 
-        return jsonify({"data": response_data})
+        return dump_response(AverageResponseTimeStatisticResponse, {"data": response_data})
 
 
+@console_ns.route("/apps/<uuid:app_id>/statistics/tokens-per-second")
 class TokensPerSecondStatistic(Resource):
+    @console_ns.doc("get_tokens_per_second_statistics")
+    @console_ns.doc(description="Get tokens per second statistics for an application")
+    @console_ns.doc(params={"app_id": "Application ID", **query_params_from_model(StatisticTimeRangeQuery)})
+    @console_ns.response(
+        200,
+        "Tokens per second statistics retrieved successfully",
+        console_ns.models[TokensPerSecondStatisticResponse.__name__],
+    )
     @setup_required
     @login_required
     @account_initialization_required
+    @with_current_user
+    @rbac_permission_required(RBACResourceScope.APP, RBACPermission.APP_MONITOR)
     @get_app_model
-    def get(self, app_model):
-        account = current_user
+    @model_validate(StatisticTimeRangeQuery)
+    def get(self, req_data: StatisticTimeRangeQuery, account: Account, app_model: App):
 
-        parser = reqparse.RequestParser()
-        parser.add_argument("start", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        parser.add_argument("end", type=DatetimeString("%Y-%m-%d %H:%M"), location="args")
-        args = parser.parse_args()
-
-        sql_query = """SELECT
-    DATE(DATE_TRUNC('day', created_at AT TIME ZONE 'UTC' AT TIME ZONE :tz )) AS date,
+        converted_created_at = convert_datetime_to_date("created_at")
+        sql_query = f"""SELECT
+    {converted_created_at} AS date,
     CASE
         WHEN SUM(provider_response_latency) = 0 THEN 0
         ELSE (SUM(answer_tokens) / SUM(provider_response_latency))
@@ -464,29 +621,25 @@ class TokensPerSecondStatistic(Resource):
 FROM
     messages
 WHERE
-    app_id = :app_id"""
-        arg_dict = {"tz": account.timezone, "app_id": app_model.id}
+    app_id = :app_id
+    AND invoke_from != :invoke_from"""
+        assert account.timezone is not None
+        arg_dict: dict[str, object] = {
+            "tz": account.timezone,
+            "app_id": app_model.id,
+            "invoke_from": InvokeFrom.DEBUGGER,
+        }
 
-        timezone = pytz.timezone(account.timezone)
-        utc_timezone = pytz.utc
+        try:
+            start_datetime_utc, end_datetime_utc = parse_time_range(req_data.start, req_data.end, account.timezone)
+        except ValueError as e:
+            abort(400, description=str(e))
 
-        if args["start"]:
-            start_datetime = datetime.strptime(args["start"], "%Y-%m-%d %H:%M")
-            start_datetime = start_datetime.replace(second=0)
-
-            start_datetime_timezone = timezone.localize(start_datetime)
-            start_datetime_utc = start_datetime_timezone.astimezone(utc_timezone)
-
+        if start_datetime_utc:
             sql_query += " AND created_at >= :start"
             arg_dict["start"] = start_datetime_utc
 
-        if args["end"]:
-            end_datetime = datetime.strptime(args["end"], "%Y-%m-%d %H:%M")
-            end_datetime = end_datetime.replace(second=0)
-
-            end_datetime_timezone = timezone.localize(end_datetime)
-            end_datetime_utc = end_datetime_timezone.astimezone(utc_timezone)
-
+        if end_datetime_utc:
             sql_query += " AND created_at < :end"
             arg_dict["end"] = end_datetime_utc
 
@@ -499,14 +652,4 @@ WHERE
             for i in rs:
                 response_data.append({"date": str(i.date), "tps": round(i.tokens_per_second, 4)})
 
-        return jsonify({"data": response_data})
-
-
-api.add_resource(DailyMessageStatistic, "/apps/<uuid:app_id>/statistics/daily-messages")
-api.add_resource(DailyConversationStatistic, "/apps/<uuid:app_id>/statistics/daily-conversations")
-api.add_resource(DailyTerminalsStatistic, "/apps/<uuid:app_id>/statistics/daily-end-users")
-api.add_resource(DailyTokenCostStatistic, "/apps/<uuid:app_id>/statistics/token-costs")
-api.add_resource(AverageSessionInteractionStatistic, "/apps/<uuid:app_id>/statistics/average-session-interactions")
-api.add_resource(UserSatisfactionRateStatistic, "/apps/<uuid:app_id>/statistics/user-satisfaction-rate")
-api.add_resource(AverageResponseTimeStatistic, "/apps/<uuid:app_id>/statistics/average-response-time")
-api.add_resource(TokensPerSecondStatistic, "/apps/<uuid:app_id>/statistics/tokens-per-second")
+        return dump_response(TokensPerSecondStatisticResponse, {"data": response_data})

@@ -1,10 +1,23 @@
-from typing import Optional
+from collections.abc import Mapping
+from typing import Any, TypedDict, override
+
+from sqlalchemy import select
 
 from core.extension.api_based_extension_requestor import APIBasedExtensionRequestor
 from core.external_data_tool.base import ExternalDataTool
 from core.helper import encrypter
 from extensions.ext_database import db
 from models.api_based_extension import APIBasedExtension, APIBasedExtensionPoint
+
+
+class ApiToolConfig(TypedDict, total=False):
+    """Expected config shape for ApiExternalDataTool.
+
+    Not used directly in method signatures (base class accepts dict[str, Any]);
+    kept here to document the keys this tool reads from config.
+    """
+
+    api_based_extension_id: str
 
 
 class ApiExternalDataTool(ExternalDataTool):
@@ -16,7 +29,8 @@ class ApiExternalDataTool(ExternalDataTool):
     """the unique name of external data tool"""
 
     @classmethod
-    def validate_config(cls, tenant_id: str, config: dict) -> None:
+    @override
+    def validate_config(cls, tenant_id: str, config: dict[str, Any]):
         """
         Validate the incoming form config data.
 
@@ -28,18 +42,17 @@ class ApiExternalDataTool(ExternalDataTool):
         api_based_extension_id = config.get("api_based_extension_id")
         if not api_based_extension_id:
             raise ValueError("api_based_extension_id is required")
-
         # get api_based_extension
-        api_based_extension = (
-            db.session.query(APIBasedExtension)
-            .where(APIBasedExtension.tenant_id == tenant_id, APIBasedExtension.id == api_based_extension_id)
-            .first()
+        stmt = select(APIBasedExtension).where(
+            APIBasedExtension.tenant_id == tenant_id, APIBasedExtension.id == api_based_extension_id
         )
+        api_based_extension = db.session.scalar(stmt)
 
         if not api_based_extension:
             raise ValueError("api_based_extension_id is invalid")
 
-    def query(self, inputs: dict, query: Optional[str] = None) -> str:
+    @override
+    def query(self, inputs: Mapping[str, Any], query: str | None = None) -> str:
         """
         Query the external data tool.
 
@@ -52,13 +65,11 @@ class ApiExternalDataTool(ExternalDataTool):
             raise ValueError(f"config is required, config: {self.config}")
         api_based_extension_id = self.config.get("api_based_extension_id")
         assert api_based_extension_id is not None, "api_based_extension_id is required"
-
         # get api_based_extension
-        api_based_extension = (
-            db.session.query(APIBasedExtension)
-            .where(APIBasedExtension.tenant_id == self.tenant_id, APIBasedExtension.id == api_based_extension_id)
-            .first()
+        stmt = select(APIBasedExtension).where(
+            APIBasedExtension.tenant_id == self.tenant_id, APIBasedExtension.id == api_based_extension_id
         )
+        api_based_extension = db.session.scalar(stmt)
 
         if not api_based_extension:
             raise ValueError(

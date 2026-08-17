@@ -1,78 +1,169 @@
 'use client'
-import type { FC, PropsWithChildren } from 'react'
-import { useEffect } from 'react'
-import { useCallback } from 'react'
-import { useWebAppStore } from '@/context/web-app-context'
-import { useRouter, useSearchParams } from 'next/navigation'
-import AppUnavailable from '@/app/components/base/app-unavailable'
-import { checkOrSetAccessToken, removeAccessToken, setAccessToken } from '@/app/components/share/utils'
+import type { PropsWithChildren } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { fetchAccessToken } from '@/service/share'
+import {
+  isWebAppSigninPath,
+  resolveWebAppLoginRedirect,
+} from '@/app/(shareLayout)/webapp-signin/login-redirect'
+import AppUnavailable from '@/app/components/base/app-unavailable'
 import Loading from '@/app/components/base/loading'
-import { AccessMode } from '@/models/access-control'
+import { useWebAppStore } from '@/context/web-app-context'
+import { usePathname, useRouter, useSearchParams } from '@/next/navigation'
+import { fetchAccessToken } from '@/service/share'
+import { resolveWebAppAddress } from '@/service/webapp-address'
+import {
+  setWebAppAccessToken,
+  setWebAppPassport,
+  webAppLoginStatus,
+  webAppLogout,
+} from '@/service/webapp-auth'
+import { getClientLoginFallback } from '@/utils/login-redirect'
+import { replaceLoginRedirect } from '@/utils/login-redirect.client'
+import { basePath } from '@/utils/var'
 
-const Splash: FC<PropsWithChildren> = ({ children }) => {
+function Splash({ children }: PropsWithChildren) {
   const { t } = useTranslation()
-  const shareCode = useWebAppStore(s => s.shareCode)
-  const webAppAccessMode = useWebAppStore(s => s.webAppAccessMode)
+  const shareCode = useWebAppStore((s) => s.shareCode)
+  const webAppAccessMode = useWebAppStore((s) => s.webAppAccessMode)
+  const embeddedUserId = useWebAppStore((s) => s.embeddedUserId)
+  const pathname = usePathname()
   const searchParams = useSearchParams()
   const router = useRouter()
   const redirectUrl = searchParams.get('redirect_url')
-  const tokenFromUrl = searchParams.get('web_sso_token')
   const message = searchParams.get('message')
   const code = searchParams.get('code')
+  const tokenFromUrl = searchParams.get('web_sso_token')
   const getSigninUrl = useCallback(() => {
     const params = new URLSearchParams(searchParams)
     params.delete('message')
     params.delete('code')
+    const loginRedirect = resolveWebAppLoginRedirect(redirectUrl, window.location.origin)
+    if (loginRedirect) params.set('redirect_url', loginRedirect.target.href)
+    else params.delete('redirect_url')
     return `/webapp-signin?${params.toString()}`
-  }, [searchParams])
+  }, [redirectUrl, searchParams])
 
-  const backToHome = useCallback(() => {
-    removeAccessToken()
+  const backToHome = useCallback(async () => {
+    const loginRedirect = resolveWebAppLoginRedirect(redirectUrl, window.location.origin)
+    const address = loginRedirect?.address || resolveWebAppAddress()
+    if (!address || (isWebAppSigninPath(pathname) && !loginRedirect)) {
+      replaceLoginRedirect(getClientLoginFallback(), router.replace, basePath)
+      return
+    }
+
+    await webAppLogout(address)
     const url = getSigninUrl()
     router.replace(url)
-  }, [getSigninUrl, router])
+  }, [getSigninUrl, pathname, redirectUrl, router])
 
+  const [isLoading, setIsLoading] = useState(true)
+  const [unavailableShareCode, setUnavailableShareCode] = useState<string>()
   useEffect(() => {
-    (async () => {
-      if (message)
-        return
-      if (shareCode && tokenFromUrl && redirectUrl) {
-        localStorage.setItem('webapp_access_token', tokenFromUrl)
-        const tokenResp = await fetchAccessToken({ appCode: shareCode, webAppAccessToken: tokenFromUrl })
-        await setAccessToken(shareCode, tokenResp.access_token)
-        router.replace(decodeURIComponent(redirectUrl))
-        return
-      }
-      if (shareCode && redirectUrl && localStorage.getItem('webapp_access_token')) {
-        const tokenResp = await fetchAccessToken({ appCode: shareCode, webAppAccessToken: localStorage.getItem('webapp_access_token') })
-        await setAccessToken(shareCode, tokenResp.access_token)
-        router.replace(decodeURIComponent(redirectUrl))
-        return
-      }
-      if (webAppAccessMode === AccessMode.PUBLIC && redirectUrl) {
-        await checkOrSetAccessToken(shareCode)
-        router.replace(decodeURIComponent(redirectUrl))
+    const loginRedirect = resolveWebAppLoginRedirect(redirectUrl, window.location.origin)
+    const isSigninRoute = isWebAppSigninPath(pathname)
+    if ((redirectUrl !== null && !loginRedirect) || (isSigninRoute && !loginRedirect)) {
+      replaceLoginRedirect(getClientLoginFallback(), router.replace, basePath)
+      return
+    }
+
+    const address = loginRedirect?.address || resolveWebAppAddress()
+    if (!address) return
+    const effectiveShareCode = address.code
+
+    if (message) return
+
+    if (tokenFromUrl) setWebAppAccessToken(tokenFromUrl)
+
+    const redirectOrFinish = () => {
+      if (loginRedirect) replaceLoginRedirect(loginRedirect.target, router.replace, basePath)
+      else setIsLoading(false)
+    }
+
+    const proceedToAuth = () => {
+      setIsLoading(false)
+    }
+
+    ;(async () => {
+      // if access mode is public, user login is always true, but the app login(passport) may be expired
+      const { userLoggedIn, appLoggedIn } = await webAppLoginStatus(
+        effectiveShareCode,
+        webAppAccessMode,
+        embeddedUserId || undefined,
+      )
+      if (userLoggedIn && appLoggedIn) {
+        redirectOrFinish()
+      } else if (!userLoggedIn && !appLoggedIn) {
+        proceedToAuth()
+      } else if (!userLoggedIn && appLoggedIn) {
+        redirectOrFinish()
+      } else if (userLoggedIn && !appLoggedIn) {
+        try {
+          const { access_token } = await fetchAccessToken({
+            appCode: effectiveShareCode,
+            userId: embeddedUserId || undefined,
+          })
+          setWebAppPassport(address, access_token)
+          redirectOrFinish()
+        } catch (error) {
+          if (error instanceof Response && error.status === 404) {
+            setUnavailableShareCode(effectiveShareCode)
+            await webAppLogout(address)
+            return
+          }
+          await webAppLogout(address)
+          proceedToAuth()
+        }
       }
     })()
-  }, [shareCode, redirectUrl, router, tokenFromUrl, message, webAppAccessMode])
+  }, [
+    shareCode,
+    redirectUrl,
+    pathname,
+    router,
+    message,
+    webAppAccessMode,
+    tokenFromUrl,
+    embeddedUserId,
+  ])
 
   if (message) {
-    return <div className='flex h-full flex-col items-center justify-center gap-y-4'>
-      <AppUnavailable className='h-auto w-auto' code={code || t('share.common.appUnavailable')} unknownReason={message} />
-      <span className='system-sm-regular cursor-pointer text-text-tertiary' onClick={backToHome}>{code === '403' ? t('common.userProfile.logout') : t('share.login.backToHome')}</span>
-    </div>
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-y-4">
+        <AppUnavailable
+          className="size-auto"
+          code={code || t(($) => $['common.appUnavailable'], { ns: 'share' })}
+          unknownReason={message}
+        />
+        <button
+          type="button"
+          className="cursor-pointer system-sm-regular text-text-tertiary"
+          onClick={backToHome}
+        >
+          {code === '403'
+            ? t(($) => $['userProfile.logout'], { ns: 'common' })
+            : t(($) => $['login.backToHome'], { ns: 'share' })}
+        </button>
+      </div>
+    )
   }
-  if (tokenFromUrl) {
-    return <div className='flex h-full items-center justify-center'>
-      <Loading />
-    </div>
+
+  if (unavailableShareCode === shareCode) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <AppUnavailable />
+      </div>
+    )
   }
-  if (webAppAccessMode === AccessMode.PUBLIC && redirectUrl) {
-    return <div className='flex h-full items-center justify-center'>
-      <Loading />
-    </div>
+
+  if (!shareCode && redirectUrl === null && !isWebAppSigninPath(pathname)) return <>{children}</>
+
+  if (isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loading />
+      </div>
+    )
   }
   return <>{children}</>
 }

@@ -1,4 +1,5 @@
 import type { FC } from 'react'
+import { Notion } from '@/app/components/base/icons/src/public/common'
 import {
   Csv,
   Doc,
@@ -11,17 +12,13 @@ import {
   Unknown,
   Xlsx,
 } from '@/app/components/base/icons/src/public/files'
-import { Notion } from '@/app/components/base/icons/src/public/common'
 
 type FileIconProps = {
   type: string
   className?: string
 }
 
-const FileIcon: FC<FileIconProps> = ({
-  type,
-  className,
-}) => {
+const FileIcon: FC<FileIconProps> = ({ type, className }) => {
   switch (type) {
     case 'csv':
       return <Csv className={className} />

@@ -1,31 +1,24 @@
 'use client'
 import type { FC } from 'react'
-import React from 'react'
+import { RiApps2Line } from '@remixicon/react'
+import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  RiApps2Line,
-} from '@remixicon/react'
-import UsageInfo from '../usage-info'
 import { useProviderContext } from '@/context/provider-context'
+import UsageInfo from '../usage-info'
 
-type Props = {
+type Props = Readonly<{
   className?: string
-}
+}>
 
-const AppsInfo: FC<Props> = ({
-  className,
-}) => {
+const AppsInfo: FC<Props> = ({ className }) => {
   const { t } = useTranslation()
   const { plan } = useProviderContext()
-  const {
-    usage,
-    total,
-  } = plan
+  const { usage, total } = plan
   return (
     <UsageInfo
       className={className}
       Icon={RiApps2Line}
-      name={t('billing.usagePage.buildApps')}
+      name={t(($) => $['usagePage.buildApps'], { ns: 'billing' })}
       usage={usage.buildApps}
       total={total.buildApps}
     />

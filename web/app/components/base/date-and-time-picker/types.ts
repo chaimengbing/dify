@@ -1,3 +1,4 @@
+import type { Placement, PopoverTriggerProps } from '@langgenius/dify-ui/popover'
 import type { Dayjs } from 'dayjs'
 
 export enum ViewType {
@@ -11,10 +12,13 @@ export enum Period {
   PM = 'PM',
 }
 
+type PopoverTriggerRender = Exclude<NonNullable<PopoverTriggerProps['render']>, React.ReactElement>
+type TriggerRenderProps = Parameters<PopoverTriggerRender>[0]
+type TriggerState = Parameters<PopoverTriggerRender>[1]
+
 export type TriggerProps = {
   value: Dayjs | undefined
   selectedDate: Dayjs | undefined
-  isOpen: boolean
   handleClear: (e: React.MouseEvent) => void
   handleClickTrigger: (e: React.MouseEvent) => void
 }
@@ -27,9 +31,14 @@ export type DatePickerProps = {
   onChange: (date: Dayjs | undefined) => void
   onClear: () => void
   triggerWrapClassName?: string
-  renderTrigger?: (props: TriggerProps) => React.ReactNode
+  renderTrigger?: (
+    props: TriggerRenderProps,
+    state: TriggerState,
+    params: TriggerProps,
+  ) => React.ReactElement
   minuteFilter?: (minutes: string[]) => string[]
-  popupZIndexClassname?: string
+  noConfirm?: boolean
+  getIsDateDisabled?: (date: Dayjs) => boolean
 }
 
 export type DatePickerHeaderProps = {
@@ -49,20 +58,27 @@ export type DatePickerFooterProps = {
 }
 
 export type TriggerParams = {
-  isOpen: boolean
   inputElem: React.ReactNode
   onClick: (e: React.MouseEvent) => void
 }
 export type TimePickerProps = {
-  value: Dayjs | undefined
+  value: Dayjs | string | undefined
   timezone?: string
   placeholder?: string
   onChange: (date: Dayjs | undefined) => void
   onClear: () => void
-  renderTrigger?: (props: TriggerParams) => React.ReactNode
+  renderTrigger?: (
+    props: TriggerRenderProps,
+    state: TriggerState,
+    params: TriggerParams,
+  ) => React.ReactElement
   title?: string
   minuteFilter?: (minutes: string[]) => string[]
   popupClassName?: string
+  notClearable?: boolean
+  triggerFullWidth?: boolean
+  showTimezone?: boolean
+  placement?: Placement
 }
 
 export type TimePickerFooterProps = {
@@ -80,12 +96,14 @@ export type CalendarProps = {
   selectedDate: Dayjs | undefined
   onDateClick: (date: Dayjs) => void
   wrapperClassName?: string
+  getIsDateDisabled?: (date: Dayjs) => boolean
 }
 
 export type CalendarItemProps = {
   day: Day
   selectedDate: Dayjs | undefined
   onClick: (date: Dayjs) => void
+  isDisabled: boolean
 }
 
 export type TimeOptionsProps = {

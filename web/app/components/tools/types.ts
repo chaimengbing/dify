@@ -1,12 +1,18 @@
-import type { TypeWithI18N } from '../header/account-setting/model-provider-page/declarations'
+import type {
+  DatasourceProviderType,
+  ToolProviderType,
+} from '@dify/contracts/api/console/workspaces/types.gen'
+import type { VarType } from '../workflow/types'
 
-export enum LOC {
-  tools = 'tools',
-  app = 'app',
+type LocalizedText<T = string> = {
+  en_US: T
+  zh_Hans: T
+  [key: string]: T
 }
 
 export enum AuthType {
   none = 'none',
+  apiKey = 'api_key', // backward compatibility
   apiKeyHeader = 'api_key_header',
   apiKeyQuery = 'api_key_query',
 }
@@ -25,14 +31,20 @@ export type Credential = {
   api_key_query_param?: string
 }
 
-export enum CollectionType {
-  all = 'all',
-  builtIn = 'builtin',
-  custom = 'api',
-  model = 'model',
-  workflow = 'workflow',
-  mcp = 'mcp',
-}
+export const CollectionType = {
+  all: 'all',
+  builtIn: 'builtin',
+  custom: 'api',
+  model: 'model',
+  workflow: 'workflow',
+  mcp: 'mcp',
+  datasource: 'datasource',
+  trigger: 'trigger',
+} as const
+
+export type CollectionType = (typeof CollectionType)[keyof typeof CollectionType]
+
+export type CollectionProviderType = CollectionType | DatasourceProviderType | ToolProviderType
 
 export type Emoji = {
   background: string
@@ -43,44 +55,96 @@ export type Collection = {
   id: string
   name: string
   author: string
-  description: TypeWithI18N
+  description: LocalizedText
   icon: string | Emoji
-  label: TypeWithI18N
-  type: CollectionType
+  icon_dark?: string | Emoji
+  label: LocalizedText
+  type: CollectionProviderType
   team_credentials: Record<string, any>
   is_team_authorization: boolean
   allow_delete: boolean
   labels: string[]
+  tools?: Tool[]
   plugin_id?: string
   letter?: string
   // MCP Server
   server_url?: string
   updated_at?: number
   server_identifier?: string
+  timeout?: number
+  sse_read_timeout?: number
+  headers?: Record<string, string>
+  masked_headers?: Record<string, string>
+  is_authorized?: boolean
+  provider?: string
+  credential_id?: string
+  is_dynamic_registration?: boolean
+  authentication?: {
+    client_id?: string
+    client_secret?: string
+  }
+  configuration?: {
+    timeout?: number
+    sse_read_timeout?: number
+  }
+  // M3 — user-identity forwarding (MCP). Single selector now drives both
+  // "is forwarding on?" and "which mechanism to use?". Pre-collapse builds
+  // also sent a redundant `forward_user_identity` boolean; the api dropped
+  // it, so the field is gone here too.
+  identity_mode?: 'off' | 'idp_token'
+  // Workflow
+  workflow_app_id?: string
 }
 
 export type ToolParameter = {
   name: string
-  label: TypeWithI18N
-  human_description: TypeWithI18N
+  label: LocalizedText
+  human_description: LocalizedText
   type: string
   form: string
   llm_description: string
   required: boolean
+  multiple: boolean
   default: string
   options?: {
-    label: TypeWithI18N
+    label: LocalizedText
     value: string
   }[]
   min?: number
   max?: number
 }
 
+type TriggerParameter = {
+  name: string
+  label: LocalizedText
+  human_description: LocalizedText
+  type: string
+  form: string
+  llm_description: string
+  required: boolean
+  multiple: boolean
+  default: string
+  options?: {
+    label: LocalizedText
+    value: string
+  }[]
+}
+
 // Action
+export type Event = {
+  name: string
+  author: string
+  label: LocalizedText
+  description: LocalizedText
+  parameters: TriggerParameter[]
+  labels: string[]
+  output_schema: Record<string, any>
+}
+
 export type Tool = {
   name: string
   author: string
-  label: TypeWithI18N
+  label: LocalizedText
   description: any
   parameters: ToolParameter[]
   labels: string[]
@@ -89,14 +153,14 @@ export type Tool = {
 
 export type ToolCredential = {
   name: string
-  label: TypeWithI18N
-  help: TypeWithI18N | null
-  placeholder: TypeWithI18N
+  label: LocalizedText
+  help: LocalizedText | null
+  placeholder: LocalizedText
   type: string
   required: boolean
   default: string
   options?: {
-    label: TypeWithI18N
+    label: LocalizedText
     value: string
   }[]
 }
@@ -115,10 +179,10 @@ export type CustomCollectionBackend = {
   labels: string[]
 }
 
-export type ParamItem = {
+type ParamItem = {
   name: string
-  label: TypeWithI18N
-  human_description: TypeWithI18N
+  label: LocalizedText
+  human_description: LocalizedText
   llm_description: string
   type: string
   form: string
@@ -127,7 +191,7 @@ export type ParamItem = {
   min?: number
   max?: number
   options?: {
-    label: TypeWithI18N
+    label: LocalizedText
     value: string
   }[]
 }
@@ -146,6 +210,24 @@ export type WorkflowToolProviderParameter = {
   description: string
   required?: boolean
   type?: string
+}
+
+export type WorkflowToolProviderOutputParameter = {
+  name: string
+  description: string
+  type?: VarType
+  reserved?: boolean
+}
+
+export type WorkflowToolProviderOutputSchema = {
+  type: string
+  properties: Record<
+    string,
+    {
+      type: string
+      description: string
+    }
+  >
 }
 
 export type WorkflowToolProviderRequest = {
@@ -168,10 +250,11 @@ export type WorkflowToolProviderResponse = {
   tool: {
     author: string
     name: string
-    label: TypeWithI18N
-    description: TypeWithI18N
+    label: LocalizedText
+    description: LocalizedText
     labels: string[]
     parameters: ParamItem[]
+    output_schema: WorkflowToolProviderOutputSchema
   }
   privacy_policy: string
 }
@@ -182,4 +265,11 @@ export type MCPServerDetail = {
   description: string
   status: string
   parameters?: Record<string, string>
+  headers?: Record<string, string>
+}
+
+export enum MCPAuthMethod {
+  authentication = 'authentication',
+  headers = 'headers',
+  configurations = 'configurations',
 }

@@ -1,20 +1,14 @@
-import {
-  memo,
-  useCallback,
-  useState,
-} from 'react'
+import type { StatusDotStatus } from '@langgenius/dify-ui/status-dot'
+import type { Credential, PluginPayload } from './types'
+import { Button } from '@langgenius/dify-ui/button'
+import { cn } from '@langgenius/dify-ui/cn'
+import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { RiArrowDownSLine } from '@remixicon/react'
+import { memo, useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Authorize from './authorize'
 import Authorized from './authorized'
-import type {
-  Credential,
-  PluginPayload,
-} from './types'
 import { usePluginAuth } from './hooks/use-plugin-auth'
-import Button from '@/app/components/base/button'
-import Indicator from '@/app/components/header/indicator'
-import cn from '@/utils/classnames'
 
 type PluginAuthInAgentProps = {
   pluginPayload: PluginPayload
@@ -33,89 +27,91 @@ const PluginAuthInAgent = ({
     canOAuth,
     canApiKey,
     credentials,
-    disabled,
     invalidPluginCredentialInfo,
-  } = usePluginAuth(pluginPayload, true)
+    notAllowCustomCredential,
+  } = usePluginAuth(pluginPayload, true, credentialId ? [credentialId] : undefined)
 
   const extraAuthorizationItems: Credential[] = [
     {
       id: '__workspace_default__',
-      name: t('plugin.auth.workspaceDefault'),
+      name: t(($) => $['auth.workspaceDefault'], { ns: 'plugin' }),
       provider: '',
       is_default: !credentialId,
       isWorkspaceDefault: true,
     },
   ]
 
-  const handleAuthorizationItemClick = useCallback((id: string) => {
-    onAuthorizationItemClick?.(id)
-    setIsOpen(false)
-  }, [
-    onAuthorizationItemClick,
-    setIsOpen,
-  ])
+  const handleAuthorizationItemClick = useCallback(
+    (id: string) => {
+      onAuthorizationItemClick?.(id)
+      setIsOpen(false)
+    },
+    [onAuthorizationItemClick, setIsOpen],
+  )
 
-  const renderTrigger = useCallback((isOpen?: boolean) => {
-    let label = ''
-    let removed = false
-    if (!credentialId) {
-      label = t('plugin.auth.workspaceDefault')
-    }
-    else {
-      const credential = credentials.find(c => c.id === credentialId)
-      label = credential ? credential.name : t('plugin.auth.authRemoved')
-      removed = !credential
-    }
-    return (
-      <Button
-        className={cn(
-          'w-full',
-          isOpen && 'bg-components-button-secondary-bg-hover',
-          removed && 'text-text-destructive',
-        )}>
-        <Indicator
-          className='mr-2'
-          color={removed ? 'red' : 'green'}
-        />
-        {label}
-        <RiArrowDownSLine className='ml-0.5 h-4 w-4' />
-      </Button>
-    )
-  }, [credentialId, credentials, t])
+  const renderTrigger = useCallback(
+    (isOpen?: boolean) => {
+      let label = ''
+      let removed = false
+      let unavailable = false
+      let color: StatusDotStatus = 'success'
+      if (!credentialId) {
+        label = t(($) => $['auth.workspaceDefault'], { ns: 'plugin' })
+      } else {
+        const credential = credentials.find((c) => c.id === credentialId)
+        label = credential ? credential.name : t(($) => $['auth.authRemoved'], { ns: 'plugin' })
+        removed = !credential
+        unavailable = !!credential?.not_allowed_to_use && !credential?.from_enterprise
+        if (removed) color = 'error'
+        else if (unavailable) color = 'disabled'
+      }
+      return (
+        <Button
+          className={cn(
+            'w-full',
+            isOpen && 'bg-components-button-secondary-bg-hover',
+            removed && 'text-text-destructive',
+          )}
+        >
+          <StatusDot status={color} />
+          {label}
+          {unavailable && t(($) => $['auth.unavailable'], { ns: 'plugin' })}
+          <RiArrowDownSLine className="size-4" />
+        </Button>
+      )
+    },
+    [credentialId, credentials, t],
+  )
 
   return (
     <>
-      {
-        !isAuthorized && (
-          <Authorize
-            pluginPayload={pluginPayload}
-            canOAuth={canOAuth}
-            canApiKey={canApiKey}
-            disabled={disabled}
-            onUpdate={invalidPluginCredentialInfo}
-          />
-        )
-      }
-      {
-        isAuthorized && (
-          <Authorized
-            pluginPayload={pluginPayload}
-            credentials={credentials}
-            canOAuth={canOAuth}
-            canApiKey={canApiKey}
-            disabled={disabled}
-            disableSetDefault
-            onItemClick={handleAuthorizationItemClick}
-            extraAuthorizationItems={extraAuthorizationItems}
-            showItemSelectedIcon
-            renderTrigger={renderTrigger}
-            isOpen={isOpen}
-            onOpenChange={setIsOpen}
-            selectedCredentialId={credentialId || '__workspace_default__'}
-            onUpdate={invalidPluginCredentialInfo}
-          />
-        )
-      }
+      {!isAuthorized && (
+        <Authorize
+          pluginPayload={pluginPayload}
+          canOAuth={canOAuth}
+          canApiKey={canApiKey}
+          onUpdate={invalidPluginCredentialInfo}
+          notAllowCustomCredential={notAllowCustomCredential}
+        />
+      )}
+      {isAuthorized && (
+        <Authorized
+          pluginPayload={pluginPayload}
+          credentials={credentials}
+          canOAuth={canOAuth}
+          canApiKey={canApiKey}
+          disableSetDefault
+          onItemClick={handleAuthorizationItemClick}
+          extraAuthorizationItems={extraAuthorizationItems}
+          showItemSelectedIcon
+          renderTrigger={renderTrigger}
+          isOpen={isOpen}
+          onOpenChange={setIsOpen}
+          selectedCredentialId={credentialId || '__workspace_default__'}
+          onUpdate={invalidPluginCredentialInfo}
+          notAllowCustomCredential={notAllowCustomCredential}
+        />
+      )}
     </>
   )
 }

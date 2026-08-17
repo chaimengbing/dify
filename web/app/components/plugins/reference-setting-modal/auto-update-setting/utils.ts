@@ -1,7 +1,7 @@
 import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
-import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
+import utc from 'dayjs/plugin/utc'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -13,7 +13,10 @@ export const timeOfDayToDayjs = (timeOfDay: number): Dayjs => {
   return res
 }
 
-export const convertLocalSecondsToUTCDaySeconds = (secondsInDay: number, localTimezone: string): number => {
+export const convertLocalSecondsToUTCDaySeconds = (
+  secondsInDay: number,
+  localTimezone: string,
+): number => {
   const localDayStart = dayjs().tz(localTimezone).startOf('day')
   const localTargetTime = localDayStart.add(secondsInDay, 'second')
   const utcTargetTime = localTargetTime.utc()
@@ -27,11 +30,14 @@ export const dayjsToTimeOfDay = (date?: Dayjs): number => {
   return date.hour() * 3600 + date.minute() * 60
 }
 
-export const convertUTCDaySecondsToLocalSeconds = (utcDaySeconds: number, localTimezone: string): number => {
-    const utcDayStart = dayjs().utc().startOf('day')
-    const utcTargetTime = utcDayStart.add(utcDaySeconds, 'second')
-    const localTargetTime = utcTargetTime.tz(localTimezone)
-    const localDayStart = localTargetTime.startOf('day')
-    const secondsInLocalDay = localTargetTime.diff(localDayStart, 'second')
-    return secondsInLocalDay
+export const convertUTCDaySecondsToLocalSeconds = (
+  utcDaySeconds: number,
+  localTimezone: string,
+): number => {
+  const utcDayStart = dayjs().utc().startOf('day')
+  const utcTargetTime = utcDayStart.add(utcDaySeconds, 'second')
+  const localTargetTime = utcTargetTime.tz(localTimezone)
+  const localDayStart = localTargetTime.startOf('day')
+  const secondsInLocalDay = localTargetTime.diff(localDayStart, 'second')
+  return secondsInLocalDay
 }

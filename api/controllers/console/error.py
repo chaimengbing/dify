@@ -58,6 +58,12 @@ class WorkspacesLimitExceeded(BaseHTTPException):
     code = 400
 
 
+class SeatsLimitExceeded(BaseHTTPException):
+    error_code = "limit_exceeded"
+    description = "Unable to create account because the licensed seats limit was exceeded"
+    code = 400
+
+
 class AccountBannedError(BaseHTTPException):
     error_code = "account_banned"
     description = "Account is banned."
@@ -74,30 +80,6 @@ class EmailSendIpLimitError(BaseHTTPException):
     error_code = "email_send_ip_limit"
     description = "Too many emails have been sent from this IP address recently. Please try again later."
     code = 429
-
-
-class FileTooLargeError(BaseHTTPException):
-    error_code = "file_too_large"
-    description = "File size exceeded. {message}"
-    code = 413
-
-
-class UnsupportedFileTypeError(BaseHTTPException):
-    error_code = "unsupported_file_type"
-    description = "File type not allowed."
-    code = 415
-
-
-class TooManyFilesError(BaseHTTPException):
-    error_code = "too_many_files"
-    description = "Only one file is allowed."
-    code = 400
-
-
-class NoFileUploadedError(BaseHTTPException):
-    error_code = "no_file_uploaded"
-    description = "Please upload your file."
-    code = 400
 
 
 class UnauthorizedAndForceLogout(BaseHTTPException):

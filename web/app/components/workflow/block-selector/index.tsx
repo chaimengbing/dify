@@ -1,173 +1,317 @@
+import type { Placement, PopoverTriggerProps } from '@langgenius/dify-ui/popover'
+import type { CSSProperties, KeyboardEvent, MouseEventHandler } from 'react'
 import type {
-  FC,
-  MouseEventHandler,
-} from 'react'
+  CommonNodeType,
+  NodeDefault,
+  OnNodeAdd,
+  OnSelectBlock,
+  ToolWithProvider,
+} from '../types'
+import type { TabType } from './types'
+import { cn } from '@langgenius/dify-ui/cn'
+import { IconButton } from '@langgenius/dify-ui/icon-button'
 import {
-  memo,
-  useCallback,
-  useMemo,
-  useState,
-} from 'react'
+  Popover,
+  PopoverClose,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+} from '@langgenius/dify-ui/popover'
+import { memo, useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type {
-  OffsetOptions,
-  Placement,
-} from '@floating-ui/react'
-import type { BlockEnum, OnSelectBlock } from '../types'
-import Tabs from './tabs'
-import { TabsEnum } from './types'
-import {
-  PortalToFollowElem,
-  PortalToFollowElemContent,
-  PortalToFollowElemTrigger,
-} from '@/app/components/base/portal-to-follow-elem'
-import Input from '@/app/components/base/input'
-import SearchBox from '@/app/components/plugins/marketplace/search-box'
+import { useHooksStore } from '@/app/components/workflow/hooks-store'
+import useNodes from '@/app/components/workflow/store/workflow/use-nodes'
+import { FlowType } from '@/types/common'
+import TipPopup from '../operator/tip-popup'
+import { useStore } from '../store'
+import { BlockEnum, isTriggerNode } from '../types'
+import { useTabs } from './hooks'
+import { BlockSelectorPanels } from './tabs'
 
-import {
-  Plus02,
-} from '@/app/components/base/icons/src/vender/line/general'
-
-type NodeSelectorProps = {
+export type BlockSelectorProps = {
   open?: boolean
   onOpenChange?: (open: boolean) => void
   onSelect: OnSelectBlock
-  trigger?: (open: boolean) => React.ReactNode
+  trigger?: NonNullable<PopoverTriggerProps['render']>
+  triggerTooltip?: string
   placement?: Placement
-  offset?: OffsetOptions
-  triggerStyle?: React.CSSProperties
-  triggerClassName?: (open: boolean) => string
-  triggerInnerClassName?: string
+  sideOffset?: number
+  alignOffset?: number
+  triggerStyle?: CSSProperties
+  triggerClassName?: string
+  triggerAriaLabel?: string
   popupClassName?: string
-  asChild?: boolean
   availableBlocksTypes?: BlockEnum[]
   disabled?: boolean
+  blocks?: NodeDefault[]
+  dataSources?: ToolWithProvider[]
   noBlocks?: boolean
+  noTools?: boolean
+  standalonePanel?: TabType
+  showStartTab?: boolean
+  defaultActiveTab?: TabType
+  ignoreNodeIds?: string[]
+  forceEnableStartTab?: boolean // Force enabling Start tab regardless of existing trigger/user input nodes (e.g., when changing Start node type).
+  allowUserInputSelection?: boolean // Override user-input availability; default logic blocks it when triggers exist.
+  snippetInsertPayload?: Parameters<OnNodeAdd>[1]
+  isolateKeyboardEvents?: boolean
 }
-const NodeSelector: FC<NodeSelectorProps> = ({
+function BlockSelector({
   open: openFromProps,
   onOpenChange,
   onSelect,
   trigger,
+  triggerTooltip,
   placement = 'right',
-  offset = 6,
+  sideOffset,
+  alignOffset,
   triggerClassName,
-  triggerInnerClassName,
+  triggerAriaLabel,
   triggerStyle,
   popupClassName,
-  asChild,
   availableBlocksTypes,
   disabled,
+  blocks,
+  dataSources,
   noBlocks = false,
-}) => {
+  noTools = false,
+  standalonePanel,
+  showStartTab = false,
+  defaultActiveTab,
+  ignoreNodeIds = [],
+  forceEnableStartTab = false,
+  allowUserInputSelection,
+  snippetInsertPayload,
+  isolateKeyboardEvents = false,
+}: BlockSelectorProps) {
   const { t } = useTranslation()
-  const [searchText, setSearchText] = useState('')
-  const [tags, setTags] = useState<string[]>([])
   const [localOpen, setLocalOpen] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const open = openFromProps === undefined ? localOpen : openFromProps
-  const handleOpenChange = useCallback((newOpen: boolean) => {
-    setLocalOpen(newOpen)
+  const handleOpenChange = useCallback(
+    (newOpen: boolean) => {
+      if (newOpen && disabled) return
 
-    if (!newOpen)
-      setSearchText('')
+      setLocalOpen(newOpen)
+      if (onOpenChange) onOpenChange(newOpen)
+    },
+    [disabled, onOpenChange],
+  )
 
-    if (onOpenChange)
-      onOpenChange(newOpen)
-  }, [onOpenChange])
-  const handleTrigger = useCallback<MouseEventHandler<HTMLDivElement>>((e) => {
-    if (disabled)
-      return
+  const handleTrigger = useCallback<MouseEventHandler<HTMLElement>>((e) => {
     e.stopPropagation()
-    handleOpenChange(!open)
-  }, [handleOpenChange, open, disabled])
-  const handleSelect = useCallback<OnSelectBlock>((type, toolDefaultValue) => {
-    handleOpenChange(false)
-    onSelect(type, toolDefaultValue)
-  }, [handleOpenChange, onSelect])
-
-  const [activeTab, setActiveTab] = useState(noBlocks ? TabsEnum.Tools : TabsEnum.Blocks)
-  const handleActiveTabChange = useCallback((newActiveTab: TabsEnum) => {
-    setActiveTab(newActiveTab)
   }, [])
-  const searchPlaceholder = useMemo(() => {
-    if (activeTab === TabsEnum.Blocks)
-      return t('workflow.tabs.searchBlock')
+  const handlePopupClick = useCallback<MouseEventHandler<HTMLDivElement>>((event) => {
+    event.stopPropagation()
+  }, [])
 
-    if (activeTab === TabsEnum.Tools)
-      return t('workflow.tabs.searchTool')
-    return ''
-  }, [activeTab, t])
+  const handleSelect = useCallback<OnSelectBlock>(
+    (type, pluginDefaultValue) => {
+      if (disabled) return
+      handleOpenChange(false)
+      onSelect(type, pluginDefaultValue)
+    },
+    [disabled, handleOpenChange, onSelect],
+  )
+
+  const handlePopupKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (isolateKeyboardEvents) event.stopPropagation()
+    },
+    [isolateKeyboardEvents],
+  )
+
+  const triggerControl = trigger ? (
+    <PopoverTrigger
+      aria-label={triggerAriaLabel}
+      disabled={disabled}
+      render={trigger}
+      onClick={handleTrigger}
+    />
+  ) : (
+    <PopoverTrigger
+      disabled={disabled}
+      render={
+        <IconButton
+          aria-label={t(($) => $['common.addBlock'], { ns: 'workflow' })}
+          variant="primary"
+          size="xs"
+          className={cn('z-10 rounded-full', triggerClassName)}
+          style={triggerStyle}
+        >
+          <span aria-hidden className="i-custom-vender-line-general-plus-02 size-2.5" />
+        </IconButton>
+      }
+      onClick={handleTrigger}
+    />
+  )
+  const triggerWithTooltip = triggerTooltip ? (
+    <TipPopup title={triggerTooltip}>{triggerControl}</TipPopup>
+  ) : (
+    triggerControl
+  )
 
   return (
-    <PortalToFollowElem
-      placement={placement}
-      offset={offset}
-      open={open}
-      onOpenChange={handleOpenChange}
-    >
-      <PortalToFollowElemTrigger
-        asChild={asChild}
-        onClick={handleTrigger}
-        className={triggerInnerClassName}
+    <Popover modal="trap-focus" open={open} onOpenChange={handleOpenChange}>
+      {triggerWithTooltip}
+      <PopoverContent
+        placement={placement}
+        sideOffset={sideOffset}
+        alignOffset={alignOffset}
+        positionerProps={{ positionMethod: 'fixed' }}
+        popupClassName="border-none bg-transparent shadow-none"
+        popupProps={{
+          initialFocus: searchInputRef,
+          onClick: handlePopupClick,
+          ...(isolateKeyboardEvents ? { onKeyDown: handlePopupKeyDown } : {}),
+        }}
       >
-        {
-          trigger
-            ? trigger(open)
-            : (
-              <div
-                className={`
-                  z-10 flex h-4
-                  w-4 cursor-pointer items-center justify-center rounded-full bg-components-button-primary-bg text-text-primary-on-surface hover:bg-components-button-primary-bg-hover
-                  ${triggerClassName?.(open)}
-                `}
-                style={triggerStyle}
-              >
-                <Plus02 className='h-2.5 w-2.5' />
-              </div>
-            )
-        }
-      </PortalToFollowElemTrigger>
-      <PortalToFollowElemContent className='z-[1000]'>
-        <div className={`rounded-lg border-[0.5px] border-components-panel-border bg-components-panel-bg shadow-lg ${popupClassName}`}>
-          <Tabs
-            activeTab={activeTab}
-            onActiveTabChange={handleActiveTabChange}
-            filterElem={
-              <div className='relative m-2' onClick={e => e.stopPropagation()}>
-                {activeTab === TabsEnum.Blocks && (
-                  <Input
-                    showLeftIcon
-                    showClearIcon
-                    autoFocus
-                    value={searchText}
-                    placeholder={searchPlaceholder}
-                    onChange={e => setSearchText(e.target.value)}
-                    onClear={() => setSearchText('')}
-                  />
-                )}
-                {activeTab === TabsEnum.Tools && (
-                  <SearchBox
-                    search={searchText}
-                    onSearchChange={setSearchText}
-                    tags={tags}
-                    onTagsChange={setTags}
-                    size='small'
-                    placeholder={t('plugin.searchTools')!}
-                    inputClassName='grow'
-                  />
-                )}
-              </div>
-            }
+        <PopoverTitle className="sr-only">
+          {t(($) => $['common.addBlock'], { ns: 'workflow' })}
+        </PopoverTitle>
+        <div
+          className={cn(
+            'w-100 min-w-0 overflow-hidden rounded-xl border-[0.5px] border-components-panel-border bg-components-panel-bg shadow-lg',
+            popupClassName,
+          )}
+        >
+          <BlockSelectorContent
+            standalonePanel={standalonePanel}
+            searchInputRef={searchInputRef}
+            blocks={blocks}
             onSelect={handleSelect}
-            searchText={searchText}
-            tags={tags}
+            onRequestClose={() => handleOpenChange(false)}
             availableBlocksTypes={availableBlocksTypes}
+            dataSources={dataSources}
             noBlocks={noBlocks}
+            noTools={noTools}
+            showStartTab={showStartTab}
+            defaultActiveTab={defaultActiveTab}
+            ignoreNodeIds={ignoreNodeIds}
+            forceEnableStartTab={forceEnableStartTab}
+            allowUserInputSelection={allowUserInputSelection}
+            snippetInsertPayload={snippetInsertPayload}
           />
         </div>
-      </PortalToFollowElemContent>
-    </PortalToFollowElem>
+        <PopoverClose className="sr-only" tabIndex={-1}>
+          {t(($) => $['operation.close'], { ns: 'common' })}
+        </PopoverClose>
+      </PopoverContent>
+    </Popover>
   )
 }
 
-export default memo(NodeSelector)
+type BlockSelectorContentProps = Pick<
+  BlockSelectorProps,
+  | 'allowUserInputSelection'
+  | 'availableBlocksTypes'
+  | 'blocks'
+  | 'dataSources'
+  | 'defaultActiveTab'
+  | 'forceEnableStartTab'
+  | 'ignoreNodeIds'
+  | 'noBlocks'
+  | 'noTools'
+  | 'showStartTab'
+  | 'snippetInsertPayload'
+  | 'standalonePanel'
+> & {
+  onSelect: OnSelectBlock
+  onRequestClose: () => void
+  searchInputRef: React.RefObject<HTMLInputElement | null>
+}
+
+function BlockSelectorContent({
+  allowUserInputSelection,
+  availableBlocksTypes,
+  blocks: blocksFromProps,
+  dataSources: dataSourcesFromProps,
+  defaultActiveTab,
+  forceEnableStartTab = false,
+  ignoreNodeIds = [],
+  noBlocks = false,
+  noTools = false,
+  onRequestClose,
+  onSelect,
+  searchInputRef,
+  showStartTab = false,
+  snippetInsertPayload,
+  standalonePanel,
+}: BlockSelectorContentProps) {
+  const nodes = useNodes()
+  const flowType = useHooksStore((state) => state.configsMap?.flowType)
+  const availableNodesMetaData = useHooksStore((state) => state.availableNodesMetaData)
+  const fallbackDataSources = useStore((state) => state.dataSourceList)
+  const blocks = useMemo(() => {
+    if (blocksFromProps) return blocksFromProps
+
+    return (availableNodesMetaData?.nodes ?? []).filter((block) => {
+      return ![
+        BlockEnum.Start,
+        BlockEnum.StartPlaceholder,
+        BlockEnum.DataSource,
+        BlockEnum.Tool,
+        BlockEnum.IterationStart,
+        BlockEnum.LoopStart,
+        BlockEnum.DataSourceEmpty,
+      ].includes(block.metaData.type)
+    })
+  }, [availableNodesMetaData?.nodes, blocksFromProps])
+  const dataSources = dataSourcesFromProps ?? fallbackDataSources ?? []
+  const filteredNodes = useMemo(() => {
+    if (!ignoreNodeIds.length) return nodes
+    const ignoredNodeIds = new Set(ignoreNodeIds)
+    return nodes.filter((node) => !ignoredNodeIds.has(node.id))
+  }, [ignoreNodeIds, nodes])
+  const { hasTriggerNode, hasUserInputNode, hasStartPlaceholderNode } = useMemo(() => {
+    const result = {
+      hasTriggerNode: false,
+      hasUserInputNode: false,
+      hasStartPlaceholderNode: false,
+    }
+
+    for (const node of filteredNodes) {
+      const nodeType = (node.data as CommonNodeType | undefined)?.type
+      if (!nodeType) continue
+      if (nodeType === BlockEnum.Start) result.hasUserInputNode = true
+      if (nodeType === BlockEnum.StartPlaceholder) result.hasStartPlaceholderNode = true
+      if (isTriggerNode(nodeType)) result.hasTriggerNode = true
+      if (result.hasTriggerNode && result.hasUserInputNode && result.hasStartPlaceholderNode) break
+    }
+
+    return result
+  }, [filteredNodes])
+  const disableStartTab = flowType === FlowType.snippet
+  const { initialTab, tabs } = useTabs({
+    noBlocks,
+    noSources: !dataSources.length,
+    noTools,
+    noSnippets: flowType === FlowType.snippet,
+    noStart: !showStartTab,
+    defaultActiveTab,
+    hasStartPlaceholderNode,
+    disableStartTab,
+    forceEnableStartTab,
+  })
+  const allowStartNodeSelection = allowUserInputSelection ?? (!hasUserInputNode && !hasTriggerNode)
+
+  return (
+    <BlockSelectorPanels
+      tabs={tabs}
+      defaultTab={initialTab}
+      standalonePanel={standalonePanel}
+      searchInputRef={searchInputRef}
+      blocks={blocks}
+      allowStartNodeSelection={allowStartNodeSelection}
+      hasUserInputNode={hasUserInputNode}
+      hasTriggerNode={hasTriggerNode}
+      onSelect={onSelect}
+      onRequestClose={onRequestClose}
+      availableBlocksTypes={availableBlocksTypes}
+      dataSources={dataSources}
+      snippetInsertPayload={snippetInsertPayload}
+    />
+  )
+}
+
+export default memo(BlockSelector)

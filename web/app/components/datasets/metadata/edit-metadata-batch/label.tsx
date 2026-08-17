@@ -1,25 +1,23 @@
 'use client'
 import type { FC } from 'react'
-import React from 'react'
-import cn from '@/utils/classnames'
+import { cn } from '@langgenius/dify-ui/cn'
+import * as React from 'react'
 
-type Props = {
-  isDeleted?: boolean,
-  className?: string,
+type Props = Readonly<{
+  isDeleted?: boolean
+  className?: string
   text: string
-}
+}>
 
-const Label: FC<Props> = ({
-  isDeleted,
-  className,
-  text,
-}) => {
+const Label: FC<Props> = ({ isDeleted, className, text }) => {
   return (
-    <div className={cn(
-      'system-xs-medium w-[136px] shrink-0 truncate text-text-tertiary',
-      isDeleted && 'text-text-quaternary line-through',
-      className,
-    )}>
+    <div
+      className={cn(
+        'w-34 shrink-0 truncate system-xs-medium text-text-tertiary',
+        isDeleted && 'text-text-quaternary line-through',
+        className,
+      )}
+    >
       {text}
     </div>
   )

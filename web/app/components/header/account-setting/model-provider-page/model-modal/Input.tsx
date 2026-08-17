@@ -13,6 +13,7 @@ type InputProps = {
   min?: number
   max?: number
 }
+
 const Input: FC<InputProps> = ({
   value,
   onChange,
@@ -32,27 +33,18 @@ const Input: FC<InputProps> = ({
       onChange(`${min}`)
       return
     }
-
-    if (!isNaN(maxNum) && Number.parseFloat(v) > maxNum)
-      onChange(`${max}`)
+    if (!isNaN(maxNum) && Number.parseFloat(v) > maxNum) onChange(`${max}`)
   }
+
   return (
-    <div className='relative'>
+    <div className="relative">
       <input
-        autoComplete="new-password"
         tabIndex={0}
-        className={`
-          block h-8 w-full appearance-none rounded-lg border border-transparent bg-components-input-bg-normal px-3 text-sm
-          text-components-input-text-filled caret-primary-600 outline-none
-          placeholder:text-sm placeholder:text-text-tertiary
-          hover:border-components-input-border-hover hover:bg-components-input-bg-hover focus:border-components-input-border-active
-          focus:bg-components-input-bg-active focus:shadow-xs
-          ${validated && 'pr-[30px]'}
-          ${className}
-        `}
+        // Do not set autoComplete for security - prevents browser from storing sensitive API keys
+        className={`block h-8 w-full appearance-none rounded-lg border border-transparent bg-components-input-bg-normal px-3 text-sm text-components-input-text-filled caret-primary-600 outline-hidden placeholder:text-sm placeholder:text-text-tertiary hover:border-components-input-border-hover hover:bg-components-input-bg-hover focus:border-components-input-border-active focus:bg-components-input-bg-active focus:shadow-xs ${validated ? 'pr-7.5' : ''} ${className || ''} `}
         placeholder={placeholder || ''}
-        onChange={e => onChange(e.target.value)}
-        onBlur={e => toLimit(e.target.value)}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={(e) => toLimit(e.target.value)}
         onFocus={onFocus}
         value={value}
         disabled={disabled}
@@ -60,13 +52,11 @@ const Input: FC<InputProps> = ({
         min={min}
         max={max}
       />
-      {
-        validated && (
-          <div className='absolute right-2.5 top-2.5'>
-            <CheckCircle className='h-4 w-4 text-[#039855]' />
-          </div>
-        )
-      }
+      {validated && (
+        <div className="absolute top-2.5 right-2.5">
+          <CheckCircle className="h-4 w-4 text-[#039855]" />
+        </div>
+      )}
     </div>
   )
 }

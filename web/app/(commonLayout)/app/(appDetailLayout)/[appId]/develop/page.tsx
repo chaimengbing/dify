@@ -1,5 +1,5 @@
-import React from 'react'
 import type { Locale } from '@/i18n-config'
+import * as React from 'react'
 import DevelopMain from '@/app/components/develop'
 
 export type IDevelopProps = {
@@ -9,9 +9,7 @@ export type IDevelopProps = {
 const Develop = async (props: IDevelopProps) => {
   const params = await props.params
 
-  const {
-    appId,
-  } = params
+  const { appId } = params
 
   return <DevelopMain appId={appId} />
 }

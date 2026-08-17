@@ -1,33 +1,29 @@
-import React from 'react'
-import type { ReactNode } from 'react'
-import SwrInitializer from '@/app/components/swr-initializer'
-import { AppContextProvider } from '@/context/app-context'
-import GA, { GaType } from '@/app/components/base/ga'
-import HeaderWrapper from '@/app/components/header/header-wrapper'
-import Header from '@/app/components/header'
-import { EventEmitterContextProvider } from '@/context/event-emitter'
-import { ProviderContextProvider } from '@/context/provider-context'
-import { ModalContextProvider } from '@/context/modal-context'
+import * as React from 'react'
+import Zendesk from '@/app/components/base/zendesk'
+import MaintenanceNotice from '@/app/components/header/maintenance-notice'
+import MainNavLayout from '@/app/components/main-nav/layout'
+import { CommonLayoutGlobalMounts } from './global-mounts'
+import { ConsoleContextProviders, ConsoleRuntimeProviders } from './providers'
 
-const Layout = ({ children }: { children: ReactNode }) => {
+export default async function Layout({
+  children,
+  detailSidebar,
+}: {
+  children: React.ReactNode
+  detailSidebar: React.ReactNode
+}) {
   return (
-    <>
-      <GA gaType={GaType.admin} />
-      <SwrInitializer>
-        <AppContextProvider>
-          <EventEmitterContextProvider>
-            <ProviderContextProvider>
-              <ModalContextProvider>
-                <HeaderWrapper>
-                  <Header />
-                </HeaderWrapper>
-                {children}
-              </ModalContextProvider>
-            </ProviderContextProvider>
-          </EventEmitterContextProvider>
-        </AppContextProvider>
-      </SwrInitializer>
-    </>
+    <React.Fragment>
+      <ConsoleRuntimeProviders>
+        <div className="flex h-full flex-col overflow-hidden">
+          <MaintenanceNotice />
+          <ConsoleContextProviders>
+            <MainNavLayout detailSidebar={detailSidebar}>{children}</MainNavLayout>
+            <CommonLayoutGlobalMounts />
+          </ConsoleContextProviders>
+        </div>
+      </ConsoleRuntimeProviders>
+      <Zendesk />
+    </React.Fragment>
   )
 }
-export default Layout

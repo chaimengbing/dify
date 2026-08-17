@@ -1,8 +1,10 @@
-import React, { type FC } from 'react'
-import Button from '@/app/components/base/button'
+import type { Hotkey } from '@tanstack/react-hotkeys'
+import { Button } from '@langgenius/dify-ui/button'
+import { useHotkey } from '@tanstack/react-hotkeys'
 import { useTranslation } from 'react-i18next'
-import { getKeyboardKeyCodeBySystem, getKeyboardKeyNameBySystem } from '@/app/components/workflow/utils'
-import { useKeyPress } from 'ahooks'
+import { ShortcutKbd } from '@/app/components/workflow/shortcuts/shortcut-kbd'
+
+const JSON_SCHEMA_CONFIRM_HOTKEY = 'Mod+Enter' satisfies Hotkey
 
 type AdvancedActionsProps = {
   isConfirmDisabled: boolean
@@ -10,50 +12,35 @@ type AdvancedActionsProps = {
   onConfirm: () => void
 }
 
-const Key = (props: { keyName: string }) => {
-  const { keyName } = props
-  return (
-    <kbd className='system-kbd flex h-4 min-w-4 items-center justify-center rounded-[4px] bg-components-kbd-bg-white px-px text-text-primary-on-surface'>
-      {keyName}
-    </kbd>
-  )
-}
-
-const AdvancedActions: FC<AdvancedActionsProps> = ({
-  isConfirmDisabled,
-  onCancel,
-  onConfirm,
-}) => {
+export function AdvancedActions({ isConfirmDisabled, onCancel, onConfirm }: AdvancedActionsProps) {
   const { t } = useTranslation()
 
-  useKeyPress([`${getKeyboardKeyCodeBySystem('ctrl')}.enter`], (e) => {
-    e.preventDefault()
-    onConfirm()
-  }, {
-    exactMatch: true,
-    useCapture: true,
-  })
+  useHotkey(
+    JSON_SCHEMA_CONFIRM_HOTKEY,
+    () => {
+      onConfirm()
+    },
+    {
+      enabled: !isConfirmDisabled,
+      ignoreInputs: false,
+    },
+  )
 
   return (
-    <div className='flex items-center gap-x-1'>
-      <Button size='small' variant='secondary' onClick={onCancel}>
-        {t('common.operation.cancel')}
+    <div className="flex items-center gap-x-1">
+      <Button size="small" variant="secondary" onClick={onCancel}>
+        {t(($) => $['operation.cancel'], { ns: 'common' })}
       </Button>
       <Button
-        className='flex items-center gap-x-1'
+        className="flex items-center"
         disabled={isConfirmDisabled}
-        size='small'
-        variant='primary'
+        size="small"
+        variant="primary"
         onClick={onConfirm}
       >
-        <span>{t('common.operation.confirm')}</span>
-        <div className='flex items-center gap-x-0.5'>
-          <Key keyName={getKeyboardKeyNameBySystem('ctrl')} />
-          <Key keyName='⏎' />
-        </div>
+        <span>{t(($) => $['operation.confirm'], { ns: 'common' })}</span>
+        <ShortcutKbd hotkey={JSON_SCHEMA_CONFIRM_HOTKEY} bgColor="white" />
       </Button>
     </div>
   )
 }
-
-export default React.memo(AdvancedActions)

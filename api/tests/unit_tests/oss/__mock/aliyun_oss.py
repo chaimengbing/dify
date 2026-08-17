@@ -3,9 +3,8 @@ import posixpath
 from unittest.mock import MagicMock
 
 import pytest
-from _pytest.monkeypatch import MonkeyPatch
-from oss2 import Bucket  # type: ignore
-from oss2.models import GetObjectResult, PutObjectResult  # type: ignore
+from oss2 import Bucket
+from oss2.models import GetObjectResult, PutObjectResult
 
 from tests.unit_tests.oss.__mock.base import (
     get_example_bucket,
@@ -85,7 +84,7 @@ MOCK = os.getenv("MOCK_SWITCH", "false").lower() == "true"
 
 
 @pytest.fixture
-def setup_aliyun_oss_mock(monkeypatch: MonkeyPatch):
+def setup_aliyun_oss_mock(monkeypatch: pytest.MonkeyPatch):
     if MOCK:
         monkeypatch.setattr(Bucket, "__init__", MockAliyunOssClass.__init__)
         monkeypatch.setattr(Bucket, "put_object", MockAliyunOssClass.put_object)

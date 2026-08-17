@@ -2,18 +2,19 @@ import json
 from collections.abc import Generator
 from dataclasses import dataclass
 from os import getenv
-from typing import Any, Optional, Union
+from typing import Any, Union, override
 from urllib.parse import urlencode
 
 import httpx
+from sqlalchemy.orm import Session
 
-from core.file.file_manager import download
 from core.helper import ssrf_proxy
 from core.tools.__base.tool import Tool
 from core.tools.__base.tool_runtime import ToolRuntime
 from core.tools.entities.tool_bundle import ApiToolBundle
 from core.tools.entities.tool_entities import ToolEntity, ToolInvokeMessage, ToolProviderType
 from core.tools.errors import ToolInvokeError, ToolParameterValidationError, ToolProviderCredentialValidationError
+from graphon.file.file_manager import download
 
 API_TOOL_DEFAULT_TIMEOUT = (
     int(getenv("API_TOOL_DEFAULT_CONNECT_TIMEOUT", "10")),
@@ -45,6 +46,7 @@ class ApiTool(Tool):
         self.api_bundle = api_bundle
         self.provider_id = provider_id
 
+    @override
     def fork_tool_runtime(self, runtime: ToolRuntime):
         """
         fork a new tool with metadata
@@ -77,18 +79,16 @@ class ApiTool(Tool):
         # For credential validation, always return as string
         return parsed_response.to_string()
 
+    @override
     def tool_provider_type(self) -> ToolProviderType:
         return ToolProviderType.API
 
     def assembling_request(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        headers = {}
         if self.runtime is None:
             raise ToolProviderCredentialValidationError("runtime not initialized")
 
-        headers = {}
-        if self.runtime is None:
-            raise ValueError("runtime is required")
         credentials = self.runtime.credentials or {}
-
         if "auth_type" not in credentials:
             raise ToolProviderCredentialValidationError("Missing auth_type")
 
@@ -103,16 +103,17 @@ class ApiTool(Tool):
             elif not isinstance(credentials["api_key_value"], str):
                 raise ToolProviderCredentialValidationError("api_key_value must be a string")
 
+            api_key_value = credentials["api_key_value"]
             if "api_key_header_prefix" in credentials:
                 api_key_header_prefix = credentials["api_key_header_prefix"]
-                if api_key_header_prefix == "basic" and credentials["api_key_value"]:
-                    credentials["api_key_value"] = f"Basic {credentials['api_key_value']}"
-                elif api_key_header_prefix == "bearer" and credentials["api_key_value"]:
-                    credentials["api_key_value"] = f"Bearer {credentials['api_key_value']}"
+                if api_key_header_prefix == "basic" and api_key_value:
+                    api_key_value = f"Basic {api_key_value}"
+                elif api_key_header_prefix == "bearer" and api_key_value:
+                    api_key_value = f"Bearer {api_key_value}"
                 elif api_key_header_prefix == "custom":
                     pass
 
-            headers[api_key_header] = credentials["api_key_value"]
+            headers[api_key_header] = api_key_value
 
         elif credentials["auth_type"] == "api_key_query":
             # For query parameter authentication, we don't add anything to headers
@@ -278,39 +279,35 @@ class ApiTool(Tool):
         if files:
             headers.pop("Content-Type", None)
 
-        if method in {
-            "get",
-            "head",
-            "post",
-            "put",
-            "delete",
-            "patch",
-            "options",
-            "GET",
-            "POST",
-            "PUT",
-            "PATCH",
-            "DELETE",
-            "HEAD",
-            "OPTIONS",
-        }:
-            response: httpx.Response = getattr(ssrf_proxy, method.lower())(
-                url,
-                params=params,
-                headers=headers,
-                cookies=cookies,
-                data=body,
-                files=files,
-                timeout=API_TOOL_DEFAULT_TIMEOUT,
-                follow_redirects=True,
-            )
-            return response
-        else:
+        _METHOD_MAP = {
+            "get": ssrf_proxy.get,
+            "head": ssrf_proxy.head,
+            "post": ssrf_proxy.post,
+            "put": ssrf_proxy.put,
+            "delete": ssrf_proxy.delete,
+            "patch": ssrf_proxy.patch,
+        }
+        method_lc = method.lower()
+        if method_lc not in _METHOD_MAP:
             raise ValueError(f"Invalid http method {method}")
+        response: httpx.Response = _METHOD_MAP[
+            method_lc
+        ](  # https://discuss.python.org/t/type-inference-for-function-return-types/42926
+            url,
+            max_retries=0,
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            data=body,
+            files=files,
+            timeout=API_TOOL_DEFAULT_TIMEOUT,
+            follow_redirects=True,
+        )
+        return response
 
     def _convert_body_property_any_of(
         self, property: dict[str, Any], value: Any, any_of: list[dict[str, Any]], max_recursive=10
-    ) -> Any:
+    ):
         if max_recursive <= 0:
             raise Exception("Max recursion depth reached")
         for option in any_of or []:
@@ -345,7 +342,7 @@ class ApiTool(Tool):
         # If no option succeeded, you might want to return the value as is or raise an error
         return value  # or raise ValueError(f"Cannot convert value '{value}' to any specified type in anyOf")
 
-    def _convert_body_property_type(self, property: dict[str, Any], value: Any) -> Any:
+    def _convert_body_property_type(self, property: dict[str, Any], value: Any):
         try:
             if "type" in property:
                 if property["type"] == "integer" or property["type"] == "int":
@@ -364,15 +361,16 @@ class ApiTool(Tool):
                     if value is None:
                         return None
                 elif property["type"] == "object" or property["type"] == "array":
-                    if isinstance(value, str):
-                        try:
-                            return json.loads(value)
-                        except ValueError:
+                    match value:
+                        case str():
+                            try:
+                                return json.loads(value)
+                            except ValueError:
+                                return value
+                        case dict():
                             return value
-                    elif isinstance(value, dict):
-                        return value
-                    else:
-                        return value
+                        case _:
+                            return value
                 else:
                     raise ValueError(f"Invalid type {property['type']} for property {property}")
             elif "anyOf" in property and isinstance(property["anyOf"], list):
@@ -380,13 +378,15 @@ class ApiTool(Tool):
         except ValueError:
             return value
 
+    @override
     def _invoke(
         self,
+        session: Session,
         user_id: str,
         tool_parameters: dict[str, Any],
-        conversation_id: Optional[str] = None,
-        app_id: Optional[str] = None,
-        message_id: Optional[str] = None,
+        conversation_id: str | None = None,
+        app_id: str | None = None,
+        message_id: str | None = None,
     ) -> Generator[ToolInvokeMessage, None, None]:
         """
         invoke http request
@@ -402,8 +402,14 @@ class ApiTool(Tool):
         parsed_response = self.validate_and_parse_response(response)
 
         # assemble invoke message based on response type
-        if parsed_response.is_json and isinstance(parsed_response.content, dict):
-            yield self.create_json_message(parsed_response.content)
+        if parsed_response.is_json:
+            if isinstance(parsed_response.content, dict):
+                yield self.create_json_message(parsed_response.content)
+
+            # The yield below must be preserved to keep backward compatibility.
+            #
+            # ref: https://github.com/langgenius/dify/pull/23456#issuecomment-3182413088
+            yield self.create_text_message(response.text)
         else:
             # Convert to string if needed and create text message
             text_response = (

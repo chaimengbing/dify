@@ -1,8 +1,9 @@
 from collections.abc import Generator
-from datetime import datetime
-from typing import Any, Optional
+from datetime import datetime, tzinfo
+from typing import Any, cast, override
 
-import pytz
+import pytz  # type: ignore[import-untyped]
+from sqlalchemy.orm import Session
 
 from core.tools.builtin_tool.tool import BuiltinTool
 from core.tools.entities.tool_entities import ToolInvokeMessage
@@ -10,13 +11,15 @@ from core.tools.errors import ToolInvokeError
 
 
 class LocaltimeToTimestampTool(BuiltinTool):
+    @override
     def _invoke(
         self,
+        session: Session,
         user_id: str,
         tool_parameters: dict[str, Any],
-        conversation_id: Optional[str] = None,
-        app_id: Optional[str] = None,
-        message_id: Optional[str] = None,
+        conversation_id: str | None = None,
+        app_id: str | None = None,
+        message_id: str | None = None,
     ) -> Generator[ToolInvokeMessage, None, None]:
         """
         Convert localtime to timestamp
@@ -35,15 +38,25 @@ class LocaltimeToTimestampTool(BuiltinTool):
         yield self.create_text_message(f"{timestamp}")
 
     @staticmethod
-    def localtime_to_timestamp(localtime: str, time_format: str, local_tz=None) -> int | None:
+    def localtime_to_timestamp(localtime: str, time_format: str, local_tz: str | tzinfo | None = None) -> int | None:
         try:
             local_time = datetime.strptime(localtime, time_format)
-            if local_tz is None:
-                localtime = local_time.astimezone()  # type: ignore
-            elif isinstance(local_tz, str):
-                local_tz = pytz.timezone(local_tz)
-                localtime = local_tz.localize(local_time)  # type: ignore
-            timestamp = int(localtime.timestamp())  # type: ignore
+            converted_localtime: datetime
+            match local_tz:
+                case None:
+                    converted_localtime = local_time.astimezone()
+                case str() as timezone_name:
+                    timezone = pytz.timezone(timezone_name)
+                    converted_localtime = timezone.localize(local_time)
+                case tzinfo():
+                    localize = getattr(local_tz, "localize", None)
+                    if callable(localize):
+                        converted_localtime = cast(datetime, localize(local_time))
+                    else:
+                        converted_localtime = local_time.replace(tzinfo=local_tz)
+                case _:
+                    raise ValueError("local_tz must be None, a timezone name, or a tzinfo instance")
+            timestamp = int(converted_localtime.timestamp())
             return timestamp
         except Exception as e:
             raise ToolInvokeError(str(e))

@@ -1,26 +1,21 @@
-import type { MutableRefObject } from 'react'
-import { useTranslation } from 'react-i18next'
-import type { Props as FormProps } from '@/app/components/workflow/nodes/_base/components/before-run-form/form'
-import type { ValueSelector } from '@/app/components/workflow/types'
-import { type InputVar, InputVarType, type Variable } from '@/app/components/workflow/types'
+import type { RefObject } from 'react'
 import type { StartNodeType } from './types'
-import { useIsChatMode } from '../../hooks'
+import type { Props as FormProps } from '@/app/components/workflow/nodes/_base/components/before-run-form/form'
+import type { InputVar, ValueSelector, Variable } from '@/app/components/workflow/types'
+import { useTranslation } from 'react-i18next'
+import { InputVarType } from '@/app/components/workflow/types'
+import { useIsChatMode } from '../../hooks/use-workflow'
 
 type Params = {
-  id: string,
-  payload: StartNodeType,
+  id: string
+  payload: StartNodeType
   runInputData: Record<string, any>
-  runInputDataRef: MutableRefObject<Record<string, any>>
+  runInputDataRef: RefObject<Record<string, any>>
   getInputVars: (textList: string[]) => InputVar[]
   setRunInputData: (data: Record<string, any>) => void
   toVarInputs: (variables: Variable[]) => InputVar[]
 }
-const useSingleRunFormParams = ({
-  id,
-  payload,
-  runInputData,
-  setRunInputData,
-}: Params) => {
+const useSingleRunFormParams = ({ id, payload, runInputData, setRunInputData }: Params) => {
   const { t } = useTranslation()
   const isChatMode = useIsChatMode()
 
@@ -49,14 +44,12 @@ const useSingleRunFormParams = ({
       required: false,
     })
 
-    forms.push(
-      {
-        label: t('workflow.nodes.llm.singleRun.variable')!,
-        inputs,
-        values: runInputData,
-        onChange: setRunInputData,
-      },
-    )
+    forms.push({
+      label: t(($) => $['nodes.llm.singleRun.variable'], { ns: 'workflow' })!,
+      inputs,
+      values: runInputData,
+      onChange: setRunInputData,
+    })
 
     return forms
   })()
@@ -67,8 +60,7 @@ const useSingleRunFormParams = ({
     })
     const vars: ValueSelector[] = [...inputVars, ['sys', 'files']]
 
-    if (isChatMode)
-      vars.push(['sys', 'query'])
+    if (isChatMode) vars.push(['sys', 'query'])
 
     return vars
   }

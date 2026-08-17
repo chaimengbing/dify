@@ -1,10 +1,17 @@
 import logging
+from typing import Literal
+from uuid import UUID
 
-from flask_restful import fields, marshal_with, reqparse
-from flask_restful.inputs import int_range
+from pydantic import BaseModel, Field, TypeAdapter
+from sqlalchemy.orm import Session
 from werkzeug.exceptions import InternalServerError, NotFound
 
-from controllers.web import api
+from controllers.common.controller_schemas import MessageFeedbackPayload, MessageListQuery
+from controllers.common.fields import GeneratedAppResponse
+from controllers.common.schema import query_params_from_model, register_response_schema_models, register_schema_models
+from controllers.console.app.wraps import with_session
+from controllers.console.wraps import model_validate
+from controllers.web import web_ns
 from controllers.web.error import (
     AppMoreLikeThisDisabledError,
     AppSuggestedQuestionsAfterAnswerDisabledError,
@@ -18,13 +25,13 @@ from controllers.web.error import (
 from controllers.web.wraps import WebApiResource
 from core.app.entities.app_invoke_entities import InvokeFrom
 from core.errors.error import ModelCurrentlyNotSupportError, ProviderTokenNotInitError, QuotaExceededError
-from core.model_runtime.errors.invoke import InvokeError
-from fields.conversation_fields import message_file_fields
-from fields.message_fields import agent_thought_fields, feedback_fields, retriever_resource_fields
-from fields.raws import FilesContainedField
+from extensions.ext_database import db
+from fields.conversation_fields import MessageResponseSource, ResultResponse
+from fields.message_fields import SuggestedQuestionsResponse, WebMessageInfiniteScrollPagination, WebMessageListItem
+from graphon.model_runtime.errors.invoke import InvokeError
 from libs import helper
-from libs.helper import TimestampField, uuid_value
-from models.model import AppMode
+from models.enums import FeedbackRating
+from models.model import App, AppMode, EndUser
 from services.app_generate_service import AppGenerateService
 from services.errors.app import MoreLikeThisDisabledError
 from services.errors.conversation import ConversationNotExistsError
@@ -35,100 +42,159 @@ from services.errors.message import (
 )
 from services.message_service import MessageService
 
+logger = logging.getLogger(__name__)
 
+
+class MessageMoreLikeThisQuery(BaseModel):
+    response_mode: Literal["blocking", "streaming"] = Field(
+        description="Response mode",
+    )
+
+
+register_schema_models(web_ns, MessageListQuery, MessageFeedbackPayload, MessageMoreLikeThisQuery)
+register_response_schema_models(
+    web_ns,
+    GeneratedAppResponse,
+    ResultResponse,
+    SuggestedQuestionsResponse,
+    WebMessageInfiniteScrollPagination,
+)
+
+
+@web_ns.route("/messages")
 class MessageListApi(WebApiResource):
-    message_fields = {
-        "id": fields.String,
-        "conversation_id": fields.String,
-        "parent_message_id": fields.String,
-        "inputs": FilesContainedField,
-        "query": fields.String,
-        "answer": fields.String(attribute="re_sign_file_url_answer"),
-        "message_files": fields.List(fields.Nested(message_file_fields)),
-        "feedback": fields.Nested(feedback_fields, attribute="user_feedback", allow_null=True),
-        "retriever_resources": fields.List(fields.Nested(retriever_resource_fields)),
-        "created_at": TimestampField,
-        "agent_thoughts": fields.List(fields.Nested(agent_thought_fields)),
-        "metadata": fields.Raw(attribute="message_metadata_dict"),
-        "status": fields.String,
-        "error": fields.String,
-    }
-
-    message_infinite_scroll_pagination_fields = {
-        "limit": fields.Integer,
-        "has_more": fields.Boolean,
-        "data": fields.List(fields.Nested(message_fields)),
-    }
-
-    @marshal_with(message_infinite_scroll_pagination_fields)
-    def get(self, app_model, end_user):
+    @web_ns.doc("Get Message List")
+    @web_ns.doc(description="Retrieve paginated list of messages from a conversation in a chat application.")
+    @web_ns.doc(params=query_params_from_model(MessageListQuery))
+    @web_ns.doc(
+        responses={
+            200: "Success",
+            400: "Bad Request",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "Conversation Not Found or Not a Chat App",
+            500: "Internal Server Error",
+        }
+    )
+    @web_ns.response(200, "Success", web_ns.models[WebMessageInfiniteScrollPagination.__name__])
+    @model_validate(MessageListQuery)
+    def get(self, query: MessageListQuery, app_model: App, end_user: EndUser):
         app_mode = AppMode.value_of(app_model.mode)
-        if app_mode not in {AppMode.CHAT, AppMode.AGENT_CHAT, AppMode.ADVANCED_CHAT}:
+        if app_mode not in {AppMode.CHAT, AppMode.AGENT_CHAT, AppMode.ADVANCED_CHAT, AppMode.AGENT}:
             raise NotChatAppError()
 
-        parser = reqparse.RequestParser()
-        parser.add_argument("conversation_id", required=True, type=uuid_value, location="args")
-        parser.add_argument("first_id", type=uuid_value, location="args")
-        parser.add_argument("limit", type=int_range(1, 100), required=False, default=20, location="args")
-        args = parser.parse_args()
-
         try:
-            return MessageService.pagination_by_first_id(
-                app_model, end_user, args["conversation_id"], args["first_id"], args["limit"]
+            session = db.session()
+            pagination = MessageService.pagination_by_first_id(
+                app_model, end_user, query.conversation_id, query.first_id, query.limit, session=session
             )
+            adapter = TypeAdapter(WebMessageListItem)
+            items = [
+                adapter.validate_python(MessageResponseSource(message, session=session), from_attributes=True)
+                for message in pagination.data
+            ]
+            return WebMessageInfiniteScrollPagination(
+                limit=pagination.limit,
+                has_more=pagination.has_more,
+                data=items,
+            ).model_dump(mode="json")
         except ConversationNotExistsError:
             raise NotFound("Conversation Not Exists.")
         except FirstMessageNotExistsError:
             raise NotFound("First Message Not Exists.")
 
 
+@web_ns.route("/messages/<uuid:message_id>/feedbacks")
 class MessageFeedbackApi(WebApiResource):
-    def post(self, app_model, end_user, message_id):
-        message_id = str(message_id)
-
-        parser = reqparse.RequestParser()
-        parser.add_argument("rating", type=str, choices=["like", "dislike", None], location="json")
-        parser.add_argument("content", type=str, location="json", default=None)
-        args = parser.parse_args()
+    @web_ns.doc("Create Message Feedback")
+    @web_ns.doc(description="Submit feedback (like/dislike) for a specific message.")
+    @web_ns.doc(params={"message_id": {"description": "Message UUID", "type": "string", "required": True}})
+    @web_ns.doc(
+        params={
+            "rating": {
+                "description": "Feedback rating",
+                "type": "string",
+                "enum": ["like", "dislike"],
+                "required": False,
+            },
+            "content": {"description": "Feedback content", "type": "string", "required": False},
+        }
+    )
+    @web_ns.doc(
+        responses={
+            200: "Feedback submitted successfully",
+            400: "Bad Request",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "Message Not Found",
+            500: "Internal Server Error",
+        }
+    )
+    @web_ns.response(200, "Feedback submitted successfully", web_ns.models[ResultResponse.__name__])
+    @web_ns.expect(web_ns.models[MessageFeedbackPayload.__name__])
+    @model_validate(MessageFeedbackPayload)
+    def post(self, payload: MessageFeedbackPayload, app_model: App, end_user: EndUser, message_id: UUID):
+        message_id_str = str(message_id)
 
         try:
             MessageService.create_feedback(
                 app_model=app_model,
-                message_id=message_id,
+                message_id=message_id_str,
                 user=end_user,
-                rating=args.get("rating"),
-                content=args.get("content"),
+                rating=FeedbackRating(payload.rating) if payload.rating else None,
+                content=payload.content,
+                session=db.session(),
             )
         except MessageNotExistsError:
             raise NotFound("Message Not Exists.")
 
-        return {"result": "success"}
+        return ResultResponse(result="success").model_dump(mode="json")
 
 
+@web_ns.route("/messages/<uuid:message_id>/more-like-this")
 class MessageMoreLikeThisApi(WebApiResource):
-    def get(self, app_model, end_user, message_id):
+    @web_ns.doc("Generate More Like This")
+    @web_ns.doc(description="Generate a new completion similar to an existing message (completion apps only).")
+    @web_ns.doc(params=query_params_from_model(MessageMoreLikeThisQuery))
+    @web_ns.doc(
+        responses={
+            200: "Success",
+            400: "Bad Request - Not a completion app or feature disabled",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "Message Not Found",
+            500: "Internal Server Error",
+        }
+    )
+    @web_ns.response(200, "Success", web_ns.models[GeneratedAppResponse.__name__])
+    @with_session
+    @model_validate(MessageMoreLikeThisQuery)
+    def get(
+        self,
+        query: MessageMoreLikeThisQuery,
+        session: Session,
+        app_model: App,
+        end_user: EndUser,
+        message_id: UUID,
+    ):
         if app_model.mode != "completion":
             raise NotCompletionAppError()
 
-        message_id = str(message_id)
+        message_id_str = str(message_id)
 
-        parser = reqparse.RequestParser()
-        parser.add_argument(
-            "response_mode", type=str, required=True, choices=["blocking", "streaming"], location="args"
-        )
-        args = parser.parse_args()
-
-        streaming = args["response_mode"] == "streaming"
+        streaming = query.response_mode == "streaming"
 
         try:
             response = AppGenerateService.generate_more_like_this(
+                session=session,
                 app_model=app_model,
                 user=end_user,
-                message_id=message_id,
+                message_id=message_id_str,
                 invoke_from=InvokeFrom.WEB_APP,
                 streaming=streaming,
             )
 
+            # response-contract:ignore compact_generate_response
             return helper.compact_generate_response(response)
         except MessageNotExistsError:
             raise NotFound("Message Not Exists.")
@@ -145,22 +211,42 @@ class MessageMoreLikeThisApi(WebApiResource):
         except ValueError as e:
             raise e
         except Exception:
-            logging.exception("internal server error.")
+            logger.exception("internal server error.")
             raise InternalServerError()
 
 
+@web_ns.route("/messages/<uuid:message_id>/suggested-questions")
 class MessageSuggestedQuestionApi(WebApiResource):
-    def get(self, app_model, end_user, message_id):
+    @web_ns.response(200, "Success", web_ns.models[SuggestedQuestionsResponse.__name__])
+    @web_ns.doc("Get Suggested Questions")
+    @web_ns.doc(description="Get suggested follow-up questions after a message (chat apps only).")
+    @web_ns.doc(params={"message_id": {"description": "Message UUID", "type": "string", "required": True}})
+    @web_ns.doc(
+        responses={
+            200: "Success",
+            400: "Bad Request - Not a chat app or feature disabled",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "Message Not Found or Conversation Not Found",
+            500: "Internal Server Error",
+        }
+    )
+    def get(self, app_model: App, end_user: EndUser, message_id: UUID):
         app_mode = AppMode.value_of(app_model.mode)
-        if app_mode not in {AppMode.CHAT, AppMode.AGENT_CHAT, AppMode.ADVANCED_CHAT}:
-            raise NotCompletionAppError()
+        if app_mode not in {AppMode.CHAT, AppMode.AGENT_CHAT, AppMode.ADVANCED_CHAT, AppMode.AGENT}:
+            raise NotChatAppError()
 
-        message_id = str(message_id)
+        message_id_str = str(message_id)
 
         try:
             questions = MessageService.get_suggested_questions_after_answer(
-                app_model=app_model, user=end_user, message_id=message_id, invoke_from=InvokeFrom.WEB_APP
+                app_model=app_model,
+                user=end_user,
+                message_id=message_id_str,
+                invoke_from=InvokeFrom.WEB_APP,
+                session=db.session(),
             )
+            # questions is a list of strings, not a list of Message objects
         except MessageNotExistsError:
             raise NotFound("Message not found")
         except ConversationNotExistsError:
@@ -176,13 +262,7 @@ class MessageSuggestedQuestionApi(WebApiResource):
         except InvokeError as e:
             raise CompletionRequestError(e.description)
         except Exception:
-            logging.exception("internal server error.")
+            logger.exception("internal server error.")
             raise InternalServerError()
 
-        return {"data": questions}
-
-
-api.add_resource(MessageListApi, "/messages")
-api.add_resource(MessageFeedbackApi, "/messages/<uuid:message_id>/feedbacks")
-api.add_resource(MessageMoreLikeThisApi, "/messages/<uuid:message_id>/more-like-this")
-api.add_resource(MessageSuggestedQuestionApi, "/messages/<uuid:message_id>/suggested-questions")
+        return SuggestedQuestionsResponse(data=questions).model_dump(mode="json")

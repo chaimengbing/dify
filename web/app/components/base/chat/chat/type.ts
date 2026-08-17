@@ -1,13 +1,14 @@
-import type { TypeWithI18N } from '@/app/components/header/account-setting/model-provider-page/declarations'
-import type { Annotation, MessageRating } from '@/models/log'
 import type { FileEntity } from '@/app/components/base/file-uploader/types'
+import type { TypeWithI18N } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import type { InputVarType } from '@/app/components/workflow/types'
-import type { FileResponse } from '@/types/workflow'
+import type { Annotation, MessageRating } from '@/models/log'
+import type { FileResponse, HumanInputFilledFormData, HumanInputFormData } from '@/types/workflow'
 
-export type MessageMore = {
+type MessageMore = {
   time: string
   tokens: number
   latency: number | string
+  tokens_per_second?: number | string
 }
 
 export type FeedbackType = {
@@ -15,16 +16,8 @@ export type FeedbackType = {
   content?: string | null
 }
 
-export type FeedbackFunc = (
-  messageId: string,
-  feedback: FeedbackType
-) => Promise<any>
-export type SubmitAnnotationFunc = (
-  messageId: string,
-  content: string
-) => Promise<any>
-
-export type DisplayScene = 'web' | 'console'
+export type FeedbackFunc = (messageId: string, feedback: FeedbackType) => Promise<any>
+export type SubmitAnnotationFunc = (messageId: string, content: string) => Promise<any>
 
 export type ToolInfoInThought = {
   name: string
@@ -38,6 +31,7 @@ export type ThoughtItem = {
   id: string
   tool: string // plugin or dataset. May has multi.
   thought: string
+  answer?: string
   tool_input: string
   tool_labels?: { [key: string]: TypeWithI18N }
   message_id: string
@@ -47,6 +41,16 @@ export type ThoughtItem = {
   files?: string[]
   message_files?: FileEntity[]
 }
+
+type AgentResponsePart =
+  | {
+      type: 'thought'
+      thought: ThoughtItem
+    }
+  | {
+      type: 'message'
+      content: string
+    }
 
 export type CitationItem = {
   content: string
@@ -62,6 +66,23 @@ export type CitationItem = {
   score: number
   word_count: number
 }
+
+type PendingHumanInputExtraContent = {
+  type: 'human_input'
+  submitted: false
+  form_definition: HumanInputFormData
+  workflow_run_id: string
+}
+
+type SubmittedHumanInputExtraContent = {
+  type: 'human_input'
+  submitted: true
+  form_definition?: HumanInputFormData
+  form_submission_data: HumanInputFilledFormData
+  workflow_run_id?: string
+}
+
+export type ExtraContent = PendingHumanInputExtraContent | SubmittedHumanInputExtraContent
 
 export type IChatItem = {
   id: string
@@ -93,6 +114,10 @@ export type IChatItem = {
   suggestedQuestions?: string[]
   log?: { role: string; text: string; files?: FileEntity[] }[]
   agent_thoughts?: ThoughtItem[]
+  agent_response_parts?: AgentResponsePart[]
+  // for LLM reasoning (chain-of-thought) in "separated" mode, keyed by LLM node id
+  reasoningContent?: Record<string, string>
+  reasoningFinished?: boolean
   message_files?: FileEntity[]
   workflow_run_id?: string
   // for agent log
@@ -103,6 +128,10 @@ export type IChatItem = {
   siblingIndex?: number
   prevSibling?: string
   nextSibling?: string
+  // for human input
+  humanInputFormDataList?: HumanInputFormData[]
+  humanInputFilledFormDataList?: HumanInputFilledFormData[]
+  extra_contents?: ExtraContent[]
 }
 
 export type Metadata = {
@@ -118,6 +147,7 @@ export type Metadata = {
 
 export type MessageEnd = {
   id: string
+  conversation_id: string
   metadata: Metadata
   files?: FileResponse[]
 }
@@ -127,15 +157,6 @@ export type MessageReplace = {
   task_id: string
   answer: string
   conversation_id: string
-}
-
-export type AnnotationReply = {
-  id: string
-  task_id: string
-  answer: string
-  conversation_id: string
-  annotation_id: string
-  annotation_author_name: string
 }
 
 export type InputForm = {

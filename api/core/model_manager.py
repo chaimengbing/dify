@@ -1,42 +1,53 @@
 import logging
-from collections.abc import Callable, Generator, Iterable, Sequence
-from typing import IO, Any, Literal, Optional, Union, cast, overload
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from copy import deepcopy
+from typing import IO, Any, Literal, Optional, ParamSpec, TypeVar, Union, cast, overload, override
+from uuid import UUID
 
 from configs import dify_config
+from core.entities import PluginCredentialType
 from core.entities.embedding_type import EmbeddingInputType
 from core.entities.provider_configuration import ProviderConfiguration, ProviderModelBundle
 from core.entities.provider_entities import ModelLoadBalancingConfiguration
-from core.errors.error import ProviderTokenNotInitError
-from core.model_runtime.callbacks.base_callback import Callback
-from core.model_runtime.entities.llm_entities import LLMResult
-from core.model_runtime.entities.message_entities import PromptMessage, PromptMessageTool
-from core.model_runtime.entities.model_entities import ModelType
-from core.model_runtime.entities.rerank_entities import RerankResult
-from core.model_runtime.entities.text_embedding_entities import TextEmbeddingResult
-from core.model_runtime.errors.invoke import InvokeAuthorizationError, InvokeConnectionError, InvokeRateLimitError
-from core.model_runtime.model_providers.__base.large_language_model import LargeLanguageModel
-from core.model_runtime.model_providers.__base.moderation_model import ModerationModel
-from core.model_runtime.model_providers.__base.rerank_model import RerankModel
-from core.model_runtime.model_providers.__base.speech2text_model import Speech2TextModel
-from core.model_runtime.model_providers.__base.text_embedding_model import TextEmbeddingModel
-from core.model_runtime.model_providers.__base.tts_model import TTSModel
+from core.errors.error import ModelCurrentlyNotSupportError, ProviderTokenNotInitError
+from core.plugin.impl.model_runtime_factory import create_plugin_provider_manager
 from core.provider_manager import ProviderManager
 from extensions.ext_redis import redis_client
+from graphon.model_runtime.callbacks.base_callback import Callback
+from graphon.model_runtime.entities.llm_entities import LLMResult, LLMUsage
+from graphon.model_runtime.entities.message_entities import PromptMessage, PromptMessageTool
+from graphon.model_runtime.entities.model_entities import AIModelEntity, ModelFeature, ModelType
+from graphon.model_runtime.entities.rerank_entities import MultimodalRerankInput, RerankResult
+from graphon.model_runtime.entities.text_embedding_entities import EmbeddingResult
+from graphon.model_runtime.errors.invoke import InvokeAuthorizationError, InvokeConnectionError, InvokeRateLimitError
+from graphon.model_runtime.model_providers.base.large_language_model import LargeLanguageModel
+from graphon.model_runtime.model_providers.base.moderation_model import ModerationModel
+from graphon.model_runtime.model_providers.base.rerank_model import RerankModel
+from graphon.model_runtime.model_providers.base.speech2text_model import Speech2TextModel
+from graphon.model_runtime.model_providers.base.text_embedding_model import TextEmbeddingModel
+from graphon.model_runtime.model_providers.base.tts_model import TTSModel
 from models.provider import ProviderType
 
 logger = logging.getLogger(__name__)
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 class ModelInstance:
     """
-    Model instance class
+    Model instance class.
     """
 
-    def __init__(self, provider_model_bundle: ProviderModelBundle, model: str) -> None:
+    def __init__(self, provider_model_bundle: ProviderModelBundle, model: str, credentials: dict | None = None) -> None:
         self.provider_model_bundle = provider_model_bundle
-        self.model = model
+        self.model_name = model
         self.provider = provider_model_bundle.configuration.provider.provider
-        self.credentials = self._fetch_credentials_from_bundle(provider_model_bundle, model)
+        if credentials is None:
+            credentials = self._fetch_credentials_from_bundle(provider_model_bundle, model)
+        self.credentials = credentials
+        # Runtime LLM invocation fields.
+        self.parameters: Mapping[str, Any] = {}
+        self.stop: Sequence[str] = ()
         self.model_type_instance = self.provider_model_bundle.model_type_instance
         self.load_balancing_manager = self._get_load_balancing_manager(
             configuration=provider_model_bundle.configuration,
@@ -45,8 +56,15 @@ class ModelInstance:
             credentials=self.credentials,
         )
 
+    def get_model_schema(self) -> AIModelEntity:
+        """Return the resolved schema for the current model instance."""
+        model_schema = self.model_type_instance.get_model_schema(self.model_name, self.credentials)
+        if model_schema is None:
+            raise ValueError(f"model schema not found for {self.model_name}")
+        return model_schema
+
     @staticmethod
-    def _fetch_credentials_from_bundle(provider_model_bundle: ProviderModelBundle, model: str) -> dict:
+    def _fetch_credentials_from_bundle(provider_model_bundle: ProviderModelBundle, model: str):
         """
         Fetch credentials from provider model bundle
         :param provider_model_bundle: provider model bundle
@@ -64,7 +82,7 @@ class ModelInstance:
 
     @staticmethod
     def _get_load_balancing_manager(
-        configuration: ProviderConfiguration, model_type: ModelType, model: str, credentials: dict
+        configuration: ProviderConfiguration, model_type: ModelType, model: str, credentials: dict[str, Any]
     ) -> Optional["LBModelManager"]:
         """
         Get load balancing model credentials
@@ -102,47 +120,47 @@ class ModelInstance:
     def invoke_llm(
         self,
         prompt_messages: Sequence[PromptMessage],
-        model_parameters: Optional[dict] = None,
+        model_parameters: dict[str, Any] | None = None,
         tools: Sequence[PromptMessageTool] | None = None,
-        stop: Optional[list[str]] = None,
+        stop: list[str] | None = None,
         stream: Literal[True] = True,
-        user: Optional[str] = None,
-        callbacks: Optional[list[Callback]] = None,
+        callbacks: list[Callback] | None = None,
+        request_metadata: Mapping[str, object] | None = None,
     ) -> Generator: ...
 
     @overload
     def invoke_llm(
         self,
         prompt_messages: list[PromptMessage],
-        model_parameters: Optional[dict] = None,
+        model_parameters: dict[str, Any] | None = None,
         tools: Sequence[PromptMessageTool] | None = None,
-        stop: Optional[list[str]] = None,
+        stop: list[str] | None = None,
         stream: Literal[False] = False,
-        user: Optional[str] = None,
-        callbacks: Optional[list[Callback]] = None,
+        callbacks: list[Callback] | None = None,
+        request_metadata: Mapping[str, object] | None = None,
     ) -> LLMResult: ...
 
     @overload
     def invoke_llm(
         self,
         prompt_messages: list[PromptMessage],
-        model_parameters: Optional[dict] = None,
+        model_parameters: dict[str, Any] | None = None,
         tools: Sequence[PromptMessageTool] | None = None,
-        stop: Optional[list[str]] = None,
+        stop: list[str] | None = None,
         stream: bool = True,
-        user: Optional[str] = None,
-        callbacks: Optional[list[Callback]] = None,
+        callbacks: list[Callback] | None = None,
+        request_metadata: Mapping[str, object] | None = None,
     ) -> Union[LLMResult, Generator]: ...
 
     def invoke_llm(
         self,
         prompt_messages: Sequence[PromptMessage],
-        model_parameters: Optional[dict] = None,
+        model_parameters: dict[str, Any] | None = None,
         tools: Sequence[PromptMessageTool] | None = None,
-        stop: Optional[Sequence[str]] = None,
+        stop: Sequence[str] | None = None,
         stream: bool = True,
-        user: Optional[str] = None,
-        callbacks: Optional[list[Callback]] = None,
+        callbacks: list[Callback] | None = None,
+        request_metadata: Mapping[str, object] | None = None,
     ) -> Union[LLMResult, Generator]:
         """
         Invoke large language model
@@ -152,32 +170,30 @@ class ModelInstance:
         :param tools: tools for tool calling
         :param stop: stop words
         :param stream: is stream response
-        :param user: unique user id
         :param callbacks: callbacks
+        :param request_metadata: optional request metadata
         :return: full response or stream response chunk generator result
         """
         if not isinstance(self.model_type_instance, LargeLanguageModel):
             raise Exception("Model type instance is not LargeLanguageModel")
-
-        self.model_type_instance = cast(LargeLanguageModel, self.model_type_instance)
         return cast(
             Union[LLMResult, Generator],
             self._round_robin_invoke(
-                function=self.model_type_instance.invoke,
-                model=self.model,
+                self.model_type_instance.invoke,
+                model=self.model_name,
                 credentials=self.credentials,
-                prompt_messages=prompt_messages,
+                prompt_messages=list(prompt_messages),
                 model_parameters=model_parameters,
-                tools=tools,
-                stop=stop,
+                tools=list(tools) if tools else None,
+                stop=list(stop) if stop else None,
                 stream=stream,
-                user=user,
                 callbacks=callbacks,
+                request_metadata=request_metadata,
             ),
         )
 
     def get_llm_num_tokens(
-        self, prompt_messages: Sequence[PromptMessage], tools: Optional[Sequence[PromptMessageTool]] = None
+        self, prompt_messages: Sequence[PromptMessage], tools: Sequence[PromptMessageTool] | None = None
     ) -> int:
         """
         Get number of tokens for llm
@@ -188,44 +204,54 @@ class ModelInstance:
         """
         if not isinstance(self.model_type_instance, LargeLanguageModel):
             raise Exception("Model type instance is not LargeLanguageModel")
-
-        self.model_type_instance = cast(LargeLanguageModel, self.model_type_instance)
-        return cast(
-            int,
-            self._round_robin_invoke(
-                function=self.model_type_instance.get_num_tokens,
-                model=self.model,
-                credentials=self.credentials,
-                prompt_messages=prompt_messages,
-                tools=tools,
-            ),
+        return self._round_robin_invoke(
+            self.model_type_instance.get_num_tokens,
+            model=self.model_name,
+            credentials=self.credentials,
+            prompt_messages=list(prompt_messages),
+            tools=list(tools) if tools else None,
         )
 
     def invoke_text_embedding(
-        self, texts: list[str], user: Optional[str] = None, input_type: EmbeddingInputType = EmbeddingInputType.DOCUMENT
-    ) -> TextEmbeddingResult:
+        self, texts: list[str], input_type: EmbeddingInputType = EmbeddingInputType.DOCUMENT
+    ) -> EmbeddingResult:
         """
         Invoke large language model
 
         :param texts: texts to embed
-        :param user: unique user id
         :param input_type: input type
         :return: embeddings result
         """
         if not isinstance(self.model_type_instance, TextEmbeddingModel):
             raise Exception("Model type instance is not TextEmbeddingModel")
+        return self._round_robin_invoke(
+            self.model_type_instance.invoke,
+            model=self.model_name,
+            credentials=self.credentials,
+            texts=texts,
+            input_type=input_type,
+        )
 
-        self.model_type_instance = cast(TextEmbeddingModel, self.model_type_instance)
-        return cast(
-            TextEmbeddingResult,
-            self._round_robin_invoke(
-                function=self.model_type_instance.invoke,
-                model=self.model,
-                credentials=self.credentials,
-                texts=texts,
-                user=user,
-                input_type=input_type,
-            ),
+    def invoke_multimodal_embedding(
+        self,
+        multimodel_documents: list[dict],
+        input_type: EmbeddingInputType = EmbeddingInputType.DOCUMENT,
+    ) -> EmbeddingResult:
+        """
+        Invoke large language model
+
+        :param multimodel_documents: multimodel documents to embed
+        :param input_type: input type
+        :return: embeddings result
+        """
+        if not isinstance(self.model_type_instance, TextEmbeddingModel):
+            raise Exception("Model type instance is not TextEmbeddingModel")
+        return self._round_robin_invoke(
+            self.model_type_instance.invoke,
+            model=self.model_name,
+            credentials=self.credentials,
+            multimodel_documents=multimodel_documents,
+            input_type=input_type,
         )
 
     def get_text_embedding_num_tokens(self, texts: list[str]) -> list[int]:
@@ -237,25 +263,19 @@ class ModelInstance:
         """
         if not isinstance(self.model_type_instance, TextEmbeddingModel):
             raise Exception("Model type instance is not TextEmbeddingModel")
-
-        self.model_type_instance = cast(TextEmbeddingModel, self.model_type_instance)
-        return cast(
-            list[int],
-            self._round_robin_invoke(
-                function=self.model_type_instance.get_num_tokens,
-                model=self.model,
-                credentials=self.credentials,
-                texts=texts,
-            ),
+        return self._round_robin_invoke(
+            self.model_type_instance.get_num_tokens,
+            model=self.model_name,
+            credentials=self.credentials,
+            texts=texts,
         )
 
     def invoke_rerank(
         self,
         query: str,
         docs: list[str],
-        score_threshold: Optional[float] = None,
-        top_n: Optional[int] = None,
-        user: Optional[str] = None,
+        score_threshold: float | None = None,
+        top_n: int | None = None,
     ) -> RerankResult:
         """
         Invoke rerank model
@@ -264,101 +284,99 @@ class ModelInstance:
         :param docs: docs for reranking
         :param score_threshold: score threshold
         :param top_n: top n
-        :param user: unique user id
         :return: rerank result
         """
         if not isinstance(self.model_type_instance, RerankModel):
             raise Exception("Model type instance is not RerankModel")
-
-        self.model_type_instance = cast(RerankModel, self.model_type_instance)
-        return cast(
-            RerankResult,
-            self._round_robin_invoke(
-                function=self.model_type_instance.invoke,
-                model=self.model,
-                credentials=self.credentials,
-                query=query,
-                docs=docs,
-                score_threshold=score_threshold,
-                top_n=top_n,
-                user=user,
-            ),
+        return self._round_robin_invoke(
+            self.model_type_instance.invoke,
+            model=self.model_name,
+            credentials=self.credentials,
+            query=query,
+            docs=docs,
+            score_threshold=score_threshold,
+            top_n=top_n,
         )
 
-    def invoke_moderation(self, text: str, user: Optional[str] = None) -> bool:
+    def invoke_multimodal_rerank(
+        self,
+        query: MultimodalRerankInput,
+        docs: list[MultimodalRerankInput],
+        score_threshold: float | None = None,
+        top_n: int | None = None,
+    ) -> RerankResult:
+        """
+        Invoke rerank model
+
+        :param query: search query
+        :param docs: docs for reranking
+        :param score_threshold: score threshold
+        :param top_n: top n
+        :return: rerank result
+        """
+        if not isinstance(self.model_type_instance, RerankModel):
+            raise Exception("Model type instance is not RerankModel")
+        return self._round_robin_invoke(
+            self.model_type_instance.invoke_multimodal_rerank,
+            model=self.model_name,
+            credentials=self.credentials,
+            query=query,
+            docs=docs,
+            score_threshold=score_threshold,
+            top_n=top_n,
+        )
+
+    def invoke_moderation(self, text: str) -> bool:
         """
         Invoke moderation model
 
         :param text: text to moderate
-        :param user: unique user id
         :return: false if text is safe, true otherwise
         """
         if not isinstance(self.model_type_instance, ModerationModel):
             raise Exception("Model type instance is not ModerationModel")
-
-        self.model_type_instance = cast(ModerationModel, self.model_type_instance)
-        return cast(
-            bool,
-            self._round_robin_invoke(
-                function=self.model_type_instance.invoke,
-                model=self.model,
-                credentials=self.credentials,
-                text=text,
-                user=user,
-            ),
+        return self._round_robin_invoke(
+            self.model_type_instance.invoke,
+            model=self.model_name,
+            credentials=self.credentials,
+            text=text,
         )
 
-    def invoke_speech2text(self, file: IO[bytes], user: Optional[str] = None) -> str:
+    def invoke_speech2text(self, file: IO[bytes]) -> str:
         """
         Invoke large language model
 
         :param file: audio file
-        :param user: unique user id
         :return: text for given audio file
         """
         if not isinstance(self.model_type_instance, Speech2TextModel):
             raise Exception("Model type instance is not Speech2TextModel")
-
-        self.model_type_instance = cast(Speech2TextModel, self.model_type_instance)
-        return cast(
-            str,
-            self._round_robin_invoke(
-                function=self.model_type_instance.invoke,
-                model=self.model,
-                credentials=self.credentials,
-                file=file,
-                user=user,
-            ),
+        return self._round_robin_invoke(
+            self.model_type_instance.invoke,
+            model=self.model_name,
+            credentials=self.credentials,
+            file=file,
         )
 
-    def invoke_tts(self, content_text: str, tenant_id: str, voice: str, user: Optional[str] = None) -> Iterable[bytes]:
+    def invoke_tts(self, content_text: str, voice: str = "") -> Iterable[bytes]:
         """
         Invoke large language tts model
 
         :param content_text: text content to be translated
-        :param tenant_id: user tenant id
         :param voice: model timbre
-        :param user: unique user id
         :return: text for given audio file
         """
         if not isinstance(self.model_type_instance, TTSModel):
             raise Exception("Model type instance is not TTSModel")
-
-        self.model_type_instance = cast(TTSModel, self.model_type_instance)
-        return cast(
-            Iterable[bytes],
-            self._round_robin_invoke(
-                function=self.model_type_instance.invoke,
-                model=self.model,
-                credentials=self.credentials,
-                content_text=content_text,
-                user=user,
-                tenant_id=tenant_id,
-                voice=voice,
-            ),
+        return self._round_robin_invoke(
+            self.model_type_instance.invoke,
+            model=self.model_name,
+            credentials=self.credentials,
+            content_text=content_text,
+            voice=voice,
         )
 
-    def _round_robin_invoke(self, function: Callable[..., Any], *args, **kwargs) -> Any:
+    def _round_robin_invoke(self, function: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
         """
         Round-robin invoke
         :param function: function to invoke
@@ -378,10 +396,26 @@ class ModelInstance:
                 else:
                     raise last_exception
 
+            # Additional policy compliance check as fallback (in case fetch_next didn't catch it)
             try:
-                if "credentials" in kwargs:
-                    del kwargs["credentials"]
-                return function(*args, **kwargs, credentials=lb_config.credentials)
+                from core.helper.credential_utils import runtime_check_credential_policy_compliance
+
+                if lb_config.credential_id:
+                    runtime_check_credential_policy_compliance(
+                        credential_id=lb_config.credential_id,
+                        provider=self.provider,
+                        credential_type=PluginCredentialType.MODEL,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Load balancing config %s failed policy compliance check in round-robin: %s", lb_config.id, str(e)
+                )
+                self.load_balancing_manager.cooldown(lb_config, expire=60)
+                continue
+
+            try:
+                kwargs["credentials"] = lb_config.credentials
+                return function(*args, **kwargs)
             except InvokeRateLimitError as e:
                 # expire in 60 seconds
                 self.load_balancing_manager.cooldown(lb_config, expire=60)
@@ -395,7 +429,7 @@ class ModelInstance:
             except Exception as e:
                 raise e
 
-    def get_tts_voices(self, language: Optional[str] = None) -> list:
+    def get_tts_voices(self, language: str | None = None):
         """
         Invoke large language tts model voices
 
@@ -404,18 +438,324 @@ class ModelInstance:
         """
         if not isinstance(self.model_type_instance, TTSModel):
             raise Exception("Model type instance is not TTSModel")
-
-        self.model_type_instance = cast(TTSModel, self.model_type_instance)
         return self.model_type_instance.get_tts_model_voices(
-            model=self.model, credentials=self.credentials, language=language
+            model=self.model_name, credentials=self.credentials, language=language
         )
 
 
-class ModelManager:
-    def __init__(self) -> None:
-        self._provider_manager = ProviderManager()
+class QuotaManagedModelInstance(ModelInstance):
+    """A system-hosted model instance that owns quota settlement per invocation."""
 
-    def get_model_instance(self, tenant_id: str, provider: str, model_type: ModelType, model: str) -> ModelInstance:
+    def reserve_quota(self, *, request_id: str | None = None):
+        from core.app.llm.quota import reserve_model_quota_for_model
+
+        return reserve_model_quota_for_model(
+            tenant_id=self.provider_model_bundle.configuration.tenant_id,
+            provider=self.provider,
+            model_type=self.model_type_instance.model_type,
+            model=self.model_name,
+            request_id=request_id,
+        )
+
+    @staticmethod
+    def _get_reservation_request_id(request_metadata: Mapping[str, object] | None) -> str | None:
+        request_id = request_metadata.get("invocation_id") if request_metadata else None
+        if not isinstance(request_id, str) or not request_id:
+            return None
+        try:
+            return str(UUID(request_id))
+        except ValueError:
+            return None
+
+    def _reserve_quota_for_request(self, request_metadata: Mapping[str, object] | None):
+        request_id = self._get_reservation_request_id(request_metadata)
+        if request_id is None:
+            return self.reserve_quota()
+        return self.reserve_quota(request_id=request_id)
+
+    @staticmethod
+    def release_quota_safely(reservation) -> None:
+        try:
+            reservation.release()
+        except Exception:
+            logger.exception("Failed to release model quota reservation")
+
+    def _invoke_with_quota(self, function: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+        reservation = self.reserve_quota()
+        try:
+            response = function(*args, **kwargs)
+            reservation.commit()
+            return response
+        finally:
+            self.release_quota_safely(reservation)
+
+    @overload
+    def invoke_llm(
+        self,
+        prompt_messages: Sequence[PromptMessage],
+        model_parameters: dict[str, Any] | None = None,
+        tools: Sequence[PromptMessageTool] | None = None,
+        stop: list[str] | None = None,
+        stream: Literal[True] = True,
+        callbacks: list[Callback] | None = None,
+        request_metadata: Mapping[str, object] | None = None,
+    ) -> Generator: ...
+
+    @overload
+    def invoke_llm(
+        self,
+        prompt_messages: list[PromptMessage],
+        model_parameters: dict[str, Any] | None = None,
+        tools: Sequence[PromptMessageTool] | None = None,
+        stop: list[str] | None = None,
+        stream: Literal[False] = False,
+        callbacks: list[Callback] | None = None,
+        request_metadata: Mapping[str, object] | None = None,
+    ) -> LLMResult: ...
+
+    @overload
+    def invoke_llm(
+        self,
+        prompt_messages: list[PromptMessage],
+        model_parameters: dict[str, Any] | None = None,
+        tools: Sequence[PromptMessageTool] | None = None,
+        stop: list[str] | None = None,
+        stream: bool = True,
+        callbacks: list[Callback] | None = None,
+        request_metadata: Mapping[str, object] | None = None,
+    ) -> Union[LLMResult, Generator]: ...
+
+    @override
+    def invoke_llm(
+        self,
+        prompt_messages: Sequence[PromptMessage],
+        model_parameters: dict[str, Any] | None = None,
+        tools: Sequence[PromptMessageTool] | None = None,
+        stop: Sequence[str] | None = None,
+        stream: bool = True,
+        callbacks: list[Callback] | None = None,
+        request_metadata: Mapping[str, object] | None = None,
+    ) -> Union[LLMResult, Generator]:
+        normalized_prompt_messages = list(prompt_messages)
+        normalized_stop = list(stop) if stop else None
+        if stream:
+            return self._invoke_llm_stream(
+                prompt_messages=normalized_prompt_messages,
+                model_parameters=model_parameters,
+                tools=tools,
+                stop=normalized_stop,
+                callbacks=callbacks,
+                request_metadata=request_metadata,
+            )
+
+        reservation = self._reserve_quota_for_request(request_metadata)
+        try:
+            response = super().invoke_llm(
+                prompt_messages=normalized_prompt_messages,
+                model_parameters=model_parameters,
+                tools=tools,
+                stop=normalized_stop,
+                stream=False,
+                callbacks=callbacks,
+                request_metadata=request_metadata,
+            )
+            if isinstance(response, Generator):
+                raise TypeError("Non-streaming LLM invocation returned a generator.")
+            reservation.commit(response.usage)
+            return response
+        finally:
+            self.release_quota_safely(reservation)
+
+    def _invoke_llm_stream(
+        self,
+        *,
+        prompt_messages: list[PromptMessage],
+        model_parameters: dict[str, Any] | None,
+        tools: Sequence[PromptMessageTool] | None,
+        stop: list[str] | None,
+        callbacks: list[Callback] | None,
+        request_metadata: Mapping[str, object] | None,
+    ) -> Generator:
+        reservation = self._reserve_quota_for_request(request_metadata)
+        usage: LLMUsage | None = None
+        try:
+            response = super().invoke_llm(
+                prompt_messages=prompt_messages,
+                model_parameters=model_parameters,
+                tools=tools,
+                stop=stop,
+                stream=True,
+                callbacks=callbacks,
+                request_metadata=request_metadata,
+            )
+            if not isinstance(response, Generator):
+                raise TypeError("Streaming LLM invocation did not return a generator.")
+
+            if reservation.commit_before_delivery:
+                for chunk in response:
+                    chunk_usage = chunk.delta.usage
+                    if chunk_usage is not None:
+                        usage = chunk_usage
+                    reservation.commit(usage)
+                    yield chunk
+                return
+
+            buffered_chunks = []
+            for chunk in response:
+                chunk_usage = chunk.delta.usage
+                if chunk_usage is not None:
+                    usage = chunk_usage
+                buffered_chunks.append(chunk)
+
+            reservation.commit(usage)
+            yield from buffered_chunks
+        finally:
+            self.release_quota_safely(reservation)
+
+    @override
+    def invoke_text_embedding(
+        self, texts: list[str], input_type: EmbeddingInputType = EmbeddingInputType.DOCUMENT
+    ) -> EmbeddingResult:
+        return self._invoke_with_quota(super().invoke_text_embedding, texts=texts, input_type=input_type)
+
+    @override
+    def invoke_multimodal_embedding(
+        self,
+        multimodel_documents: list[dict],
+        input_type: EmbeddingInputType = EmbeddingInputType.DOCUMENT,
+    ) -> EmbeddingResult:
+        return self._invoke_with_quota(
+            super().invoke_multimodal_embedding,
+            multimodel_documents=multimodel_documents,
+            input_type=input_type,
+        )
+
+    @override
+    def invoke_rerank(
+        self,
+        query: str,
+        docs: list[str],
+        score_threshold: float | None = None,
+        top_n: int | None = None,
+    ) -> RerankResult:
+        return self._invoke_with_quota(
+            super().invoke_rerank,
+            query=query,
+            docs=docs,
+            score_threshold=score_threshold,
+            top_n=top_n,
+        )
+
+    @override
+    def invoke_multimodal_rerank(
+        self,
+        query: MultimodalRerankInput,
+        docs: list[MultimodalRerankInput],
+        score_threshold: float | None = None,
+        top_n: int | None = None,
+    ) -> RerankResult:
+        return self._invoke_with_quota(
+            super().invoke_multimodal_rerank,
+            query=query,
+            docs=docs,
+            score_threshold=score_threshold,
+            top_n=top_n,
+        )
+
+    @override
+    def invoke_moderation(self, text: str) -> bool:
+        return self._invoke_with_quota(super().invoke_moderation, text=text)
+
+    @override
+    def invoke_speech2text(self, file: IO[bytes]) -> str:
+        return self._invoke_with_quota(super().invoke_speech2text, file=file)
+
+    @override
+    def invoke_tts(self, content_text: str, voice: str = "") -> Iterable[bytes]:
+        return self._invoke_tts_stream(content_text=content_text, voice=voice)
+
+    def _invoke_tts_stream(self, *, content_text: str, voice: str) -> Generator[bytes, None, None]:
+        reservation = self.reserve_quota()
+        try:
+            response = super().invoke_tts(content_text=content_text, voice=voice)
+            for chunk in response:
+                reservation.commit()
+                yield chunk
+        finally:
+            self.release_quota_safely(reservation)
+
+
+class ModelManager:
+    """Resolves :class:`ModelInstance` objects for a tenant and provider.
+
+    When ``enable_credentials_cache`` is ``True``, resolved credentials for each
+    ``(tenant_id, provider, model_type, model)`` are stored in
+    ``_credentials_cache`` and reused. That can return **stale** credentials after
+    API keys or provider settings change, so a manager constructed with
+    ``enable_credentials_cache=True`` should not be kept for the lifetime of a
+    process or shared across unrelated work. Prefer a new manager per request,
+    workflow run, or similar bounded scope.
+
+    The default is ``enable_credentials_cache=False``; in that mode the internal
+    credential cache is not populated, and each ``get_model_instance`` call
+    loads credentials from the current provider configuration.
+    """
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+        *,
+        enable_credentials_cache: bool = False,
+    ) -> None:
+        self._provider_manager = provider_manager
+        self._credentials_cache: dict[tuple[str, str, str, str], Any] = {}
+        self._enable_credentials_cache = enable_credentials_cache
+
+    @classmethod
+    def for_tenant(cls, tenant_id: str, user_id: str | None = None) -> "ModelManager":
+        return cls(provider_manager=create_plugin_provider_manager(tenant_id=tenant_id, user_id=user_id))
+
+    @staticmethod
+    def _validate_system_model_access(
+        provider_model_bundle: ProviderModelBundle,
+        *,
+        model_type: ModelType,
+        model: str,
+    ) -> None:
+        configuration = provider_model_bundle.configuration
+        if configuration.using_provider_type != ProviderType.SYSTEM:
+            return
+
+        # Hosted allowlists retain the existing comma-separated format. Model names
+        # are matched exactly; model-type-specific entries will be introduced later.
+        quota_configuration = next(
+            (
+                quota
+                for quota in configuration.system_configuration.quota_configurations
+                if quota.quota_type == configuration.system_configuration.current_quota_type
+            ),
+            None,
+        )
+        if quota_configuration is None or not quota_configuration.restrict_models:
+            return
+        if any(restricted_model.model == model for restricted_model in quota_configuration.restrict_models):
+            return
+
+        raise ModelCurrentlyNotSupportError(f"System model {model_type.value}/{model} is not allowed.")
+
+    @staticmethod
+    def _model_instance_class(provider_model_bundle: ProviderModelBundle, model_type: ModelType) -> type[ModelInstance]:
+        if provider_model_bundle.configuration.using_provider_type == ProviderType.SYSTEM:
+            return QuotaManagedModelInstance
+        return ModelInstance
+
+    def get_model_instance(
+        self,
+        tenant_id: str,
+        provider: str,
+        model_type: ModelType,
+        model: str,
+    ) -> ModelInstance:
         """
         Get model instance
         :param tenant_id: tenant id
@@ -430,8 +770,22 @@ class ModelManager:
         provider_model_bundle = self._provider_manager.get_provider_model_bundle(
             tenant_id=tenant_id, provider=provider, model_type=model_type
         )
+        self._validate_system_model_access(provider_model_bundle, model_type=model_type, model=model)
+        model_instance_class = self._model_instance_class(provider_model_bundle, model_type)
 
-        return ModelInstance(provider_model_bundle, model)
+        cred_cache_key = (tenant_id, provider, model_type.value, model)
+
+        if cred_cache_key in self._credentials_cache:
+            return model_instance_class(
+                provider_model_bundle,
+                model,
+                deepcopy(self._credentials_cache[cred_cache_key]),
+            )
+
+        ret = model_instance_class(provider_model_bundle, model)
+        if self._enable_credentials_cache:
+            self._credentials_cache[cred_cache_key] = deepcopy(ret.credentials)
+        return ret
 
     def get_default_provider_model_name(self, tenant_id: str, model_type: ModelType) -> tuple[str | None, str | None]:
         """
@@ -461,6 +815,32 @@ class ModelManager:
             model=default_model_entity.model,
         )
 
+    def check_model_support_vision(self, tenant_id: str, provider: str, model: str, model_type: ModelType) -> bool:
+        """
+        Check if model supports vision
+        :param tenant_id: tenant id
+        :param provider: provider name
+        :param model: model name
+        :return: True if model supports vision, False otherwise
+        """
+        model_instance = self.get_model_instance(tenant_id, provider, model_type, model)
+        model_type_instance = model_instance.model_type_instance
+        match model_type:
+            case ModelType.LLM:
+                model_type_instance = cast(LargeLanguageModel, model_type_instance)
+            case ModelType.TEXT_EMBEDDING:
+                model_type_instance = cast(TextEmbeddingModel, model_type_instance)
+            case ModelType.RERANK:
+                model_type_instance = cast(RerankModel, model_type_instance)
+            case _:
+                raise ValueError(f"Model type {model_type} is not supported")
+        model_schema = model_type_instance.get_model_schema(model, model_instance.credentials)
+        if not model_schema:
+            return False
+        if model_schema.features and ModelFeature.VISION in model_schema.features:
+            return True
+        return False
+
 
 class LBModelManager:
     def __init__(
@@ -470,8 +850,8 @@ class LBModelManager:
         model_type: ModelType,
         model: str,
         load_balancing_configs: list[ModelLoadBalancingConfiguration],
-        managed_credentials: Optional[dict] = None,
-    ) -> None:
+        managed_credentials: dict[str, Any] | None = None,
+    ):
         """
         Load balancing model manager
         :param tenant_id: tenant_id
@@ -495,7 +875,7 @@ class LBModelManager:
                 else:
                     load_balancing_config.credentials = managed_credentials
 
-    def fetch_next(self) -> Optional[ModelLoadBalancingConfiguration]:
+    def fetch_next(self) -> ModelLoadBalancingConfiguration | None:
         """
         Get next model load balancing config
         Strategy: Round Robin
@@ -533,6 +913,24 @@ class LBModelManager:
 
                 continue
 
+            # Check policy compliance for the selected configuration
+            try:
+                from core.helper.credential_utils import runtime_check_credential_policy_compliance
+
+                if config.credential_id:
+                    runtime_check_credential_policy_compliance(
+                        credential_id=config.credential_id,
+                        provider=self._provider,
+                        credential_type=PluginCredentialType.MODEL,
+                    )
+            except Exception as e:
+                logger.warning("Load balancing config %s failed policy compliance check: %s", config.id, str(e))
+                cooldown_load_balancing_configs.append(config)
+                if len(cooldown_load_balancing_configs) >= len(self._load_balancing_configs):
+                    # all configs are in cooldown or failed policy compliance
+                    return None
+                continue
+
             if dify_config.DEBUG:
                 logger.info(
                     """Model LB
@@ -552,7 +950,7 @@ model: %s""",
 
             return config
 
-    def cooldown(self, config: ModelLoadBalancingConfiguration, expire: int = 60) -> None:
+    def cooldown(self, config: ModelLoadBalancingConfiguration, expire: int = 60):
         """
         Cooldown model load balancing config
         :param config: model load balancing config
